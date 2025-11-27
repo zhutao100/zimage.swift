@@ -1,0 +1,21 @@
+# SwiftPM/Xcode
+/.build/
+/Packages/
+/DerivedData/
+xcuserdata/
+*.xcodeproj
+.swiftpm/xcode
+.swiftpm/cache
+
+# OS
+.DS_Store
+
+# Local temp & caches
+temp/
+*.cache
+*.profraw
+
+# Model artifacts
+models/
+checkpoints/
+outputs/
