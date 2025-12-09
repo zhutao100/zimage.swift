@@ -14,7 +14,9 @@ public final class ZImageWeightsLoader {
 
   public func listComponents() {
     let fm = FileManager.default
-    let files = ZImageFiles.transformerWeights + ZImageFiles.textEncoderWeights + ZImageFiles.vaeWeights
+    let files = ZImageFiles.resolveTransformerWeights(at: snapshot)
+      + ZImageFiles.resolveTextEncoderWeights(at: snapshot)
+      + ZImageFiles.vaeWeights
     for file in files {
       let url = snapshot.appending(path: file)
       let exists = fm.fileExists(atPath: url.path)

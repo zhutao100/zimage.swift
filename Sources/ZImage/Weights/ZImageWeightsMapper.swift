@@ -34,14 +34,14 @@ public struct ZImageWeightsMapper {
     if hasQuantization() {
       return try loadQuantizedComponent("text_encoder")
     }
-    return try loadStandardComponent(files: ZImageFiles.textEncoderWeights, dtype: dtype)
+    return try loadStandardComponent(files: ZImageFiles.resolveTextEncoderWeights(at: snapshot), dtype: dtype)
   }
 
   public func loadTransformer(dtype: DType? = .bfloat16) throws -> [String: MLXArray] {
     if hasQuantization() {
       return try loadQuantizedComponent("transformer")
     }
-    return try loadStandardComponent(files: ZImageFiles.transformerWeights, dtype: dtype)
+    return try loadStandardComponent(files: ZImageFiles.resolveTransformerWeights(at: snapshot), dtype: dtype)
   }
 
   /// Load transformer weights from a standalone safetensors file (override file)
@@ -141,10 +141,10 @@ public struct ZImageWeightsMapper {
   private func loadStandardAll(dtype: DType?) throws -> [String: MLXArray] {
     var tensors: [String: MLXArray] = [:]
 
-    for (key, value) in try loadStandardComponent(files: ZImageFiles.transformerWeights, dtype: dtype) {
+    for (key, value) in try loadStandardComponent(files: ZImageFiles.resolveTransformerWeights(at: snapshot), dtype: dtype) {
       tensors["transformer.\(key)"] = value
     }
-    for (key, value) in try loadStandardComponent(files: ZImageFiles.textEncoderWeights, dtype: dtype) {
+    for (key, value) in try loadStandardComponent(files: ZImageFiles.resolveTextEncoderWeights(at: snapshot), dtype: dtype) {
       tensors["text_encoder.\(key)"] = value
     }
     for (key, value) in try loadStandardComponent(files: ZImageFiles.vaeWeights, dtype: dtype) {
