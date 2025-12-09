@@ -212,21 +212,26 @@ public struct ZImageControlPipeline {
     let doCFG = request.guidanceScale > 1.0
 
     logger.info("Loading text encoder...")
-    let tokenizer = try loadTokenizer(snapshot: snapshot)
-    let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
-    let textEncoderWeights = try weightsMapper.loadTextEncoder()
-    ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
+    var promptEmbeds: MLXArray
+    var negativeEmbeds: MLXArray?
+    do {
+      let tokenizer = try loadTokenizer(snapshot: snapshot)
+      let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
+      let textEncoderWeights = try weightsMapper.loadTextEncoder()
+      ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
 
-    let (promptEmbeds, _) = try encodePrompt(request.prompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
+      let (pe, _) = try encodePrompt(request.prompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
 
-    let negativeEmbeds: MLXArray?
-    if doCFG {
-      let (ne, _) = try encodePrompt(request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
-      negativeEmbeds = ne
-      MLX.eval(promptEmbeds, ne)
-    } else {
-      negativeEmbeds = nil
-      MLX.eval(promptEmbeds)
+      if doCFG {
+        let (ne, _) = try encodePrompt(request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
+        promptEmbeds = pe
+        negativeEmbeds = ne
+        MLX.eval(pe, ne)
+      } else {
+        promptEmbeds = pe
+        negativeEmbeds = nil
+        MLX.eval(pe)
+      }
     }
     logger.info("Text encoding complete, clearing text encoder from memory")
     GPU.clearCache()

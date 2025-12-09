@@ -199,69 +199,48 @@ public struct ZImagePipeline {
     let doCFG = request.guidanceScale > 1.0
 
     logger.info("Loading text encoder...")
-    let tokenizer = try loadTokenizer(snapshot: snapshot)
-    let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
-    let textEncoderWeights = try weightsMapper.loadTextEncoder()
-    ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
+    var promptEmbeds: MLXArray
+    var negativeEmbeds: MLXArray?
+    do {
+      let tokenizer = try loadTokenizer(snapshot: snapshot)
+      let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
+      let textEncoderWeights = try weightsMapper.loadTextEncoder()
+      ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
 
-    var finalPrompt = request.prompt
-    if request.enhancePrompt {
-      logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
-      let enhanceConfig = PromptEnhanceConfig(
-        maxNewTokens: request.enhanceMaxTokens,
-        temperature: 0.7,
-        topP: 0.9,
-        repetitionPenalty: 1.05
-      )
-      let enhanced = try textEncoder.enhancePrompt(request.prompt, tokenizer: tokenizer, config: enhanceConfig)
-      if enhanced.isEmpty {
-        logger.warning("Prompt enhancement incomplete (need more tokens), using original prompt")
-      } else {
-        logger.info("Enhanced prompt: \(enhanced)")
-        finalPrompt = enhanced
+      var finalPrompt = request.prompt
+      if request.enhancePrompt {
+        logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
+        let enhanceConfig = PromptEnhanceConfig(
+          maxNewTokens: request.enhanceMaxTokens,
+          temperature: 0.7,
+          topP: 0.9,
+          repetitionPenalty: 1.05
+        )
+        let enhanced = try textEncoder.enhancePrompt(request.prompt, tokenizer: tokenizer, config: enhanceConfig)
+        if enhanced.isEmpty {
+          logger.warning("Prompt enhancement incomplete (need more tokens), using original prompt")
+        } else {
+          logger.info("Enhanced prompt: \(enhanced)")
+          finalPrompt = enhanced
+        }
+        GPU.clearCache()
       }
-      GPU.clearCache()
-    }
-
-    let (promptEmbeds, _) = try encodePrompt(finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
-
-    let negativeEmbeds: MLXArray?
-    if doCFG {
-      let (ne, _) = try encodePrompt(request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
-      negativeEmbeds = ne
-      MLX.eval(promptEmbeds, ne)
-    } else {
-      negativeEmbeds = nil
-      MLX.eval(promptEmbeds)
+      let (pe, _) = try encodePrompt(finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
+      if doCFG {
+        let (ne, _) = try encodePrompt(request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
+        promptEmbeds = pe
+        negativeEmbeds = ne
+        MLX.eval(pe, ne)
+      } else {
+        promptEmbeds = pe
+        negativeEmbeds = nil
+        MLX.eval(pe)
+      }
     }
     logger.info("Text encoding complete, clearing text encoder from memory")
     GPU.clearCache()
 
-    logger.info("Loading transformer...")
-    let transformer = try loadTransformer(snapshot: snapshot, config: modelConfigs.transformer)
-    // Always load base transformer weights first to ensure all required modules (x_embedder, final_layer, cap_embedder) are initialized
-    let baseTransformerWeights = try weightsMapper.loadTransformer()
-    ZImageWeightsMapping.applyTransformer(weights: baseTransformerWeights, to: transformer, manifest: quantManifest, logger: logger)
-
-    // If an override file is provided, overlay matching tensors (e.g., layers.*, context_refiner.*)
-    if let overrideURL = transformerOverrideURL {
-      logger.info("Overriding transformer weights from: \(overrideURL.lastPathComponent)")
-      var overrideWeights = try weightsMapper.loadTransformer(fromFile: overrideURL)
-      if let inferredDim = inferTransformerDim(from: overrideWeights), inferredDim != modelConfigs.transformer.dim {
-        throw PipelineError.weightsMissing("Transformer override dim \(inferredDim) mismatches model dim \(modelConfigs.transformer.dim)")
-      }
-      // Canonicalize keys from packed qkv/out to separate projections to match our module names
-      overrideWeights = canonicalizeTransformerOverride(overrideWeights, dim: modelConfigs.transformer.dim, logger: logger)
-      ZImageWeightsMapping.applyTransformer(weights: overrideWeights, to: transformer, manifest: nil, logger: logger)
-    }
-
-    if let loraPath = request.loraPath {
-      logger.info("Loading LoRA weights from: \(loraPath)")
-      let loraLoader = LoRALoader(logger: logger, hubApi: hubApi)
-      let loraWeights = try await loraLoader.loadLoRAWeights(from: loraPath)
-      applyLoRAWeights(to: transformer, loraWeights: loraWeights, loraScale: request.loraScale, logger: logger)
-    }
-
+    // Prepare latents and scheduler before transformer to allow releasing transformer sooner
     let vaeDivisor = modelConfigs.vae.latentDivisor
     let latentH = max(1, request.height / vaeDivisor)
     let latentW = max(1, request.width / vaeDivisor)
@@ -286,36 +265,65 @@ public struct ZImagePipeline {
 
     let timestepsArray = scheduler.timesteps.asArray(Float.self)
 
-    logger.info("Running \(request.steps) denoising steps...")
-    for stepIndex in 0..<request.steps {
-      let timestep = timestepsArray[stepIndex]
-      let normalizedTimestep = (1000.0 - timestep) / 1000.0
-      let timestepArray = MLXArray([normalizedTimestep], [1])
+    logger.info("Loading transformer and running denoising...")
+    do {
+      let transformer = try loadTransformer(snapshot: snapshot, config: modelConfigs.transformer)
+      // Always load base transformer weights first to ensure all required modules (x_embedder, final_layer, cap_embedder) are initialized
+      let baseTransformerWeights = try weightsMapper.loadTransformer()
+      ZImageWeightsMapping.applyTransformer(weights: baseTransformerWeights, to: transformer, manifest: quantManifest, logger: logger)
 
-      var modelLatents = latents
-      var embeds = promptEmbeds
-      if doCFG, let ne = negativeEmbeds {
-        modelLatents = MLX.concatenated([latents, latents], axis: 0)
-        embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
+      // If an override file is provided, overlay matching tensors (e.g., layers.*, context_refiner.*)
+      if let overrideURL = transformerOverrideURL {
+        logger.info("Overriding transformer weights from: \(overrideURL.lastPathComponent)")
+        var overrideWeights = try weightsMapper.loadTransformer(fromFile: overrideURL)
+        if let inferredDim = inferTransformerDim(from: overrideWeights), inferredDim != modelConfigs.transformer.dim {
+          throw PipelineError.weightsMissing("Transformer override dim \(inferredDim) mismatches model dim \(modelConfigs.transformer.dim)")
+        }
+        // Canonicalize keys from packed qkv/out to separate projections to match our module names
+        overrideWeights = canonicalizeTransformerOverride(overrideWeights, dim: modelConfigs.transformer.dim, logger: logger)
+        ZImageWeightsMapping.applyTransformer(weights: overrideWeights, to: transformer, manifest: nil, logger: logger)
       }
 
-      let noisePred = transformer.forward(latents: modelLatents, timestep: timestepArray, promptEmbeds: embeds)
-      var guidedNoise: MLXArray
-      if doCFG, negativeEmbeds != nil {
-        let batch = latents.dim(0)
-        let positive = noisePred[0 ..< batch, 0..., 0..., 0...]
-        let negative = noisePred[batch ..< batch * 2, 0..., 0..., 0...]
-        guidedNoise = positive + request.guidanceScale * (positive - negative)
-      } else {
-        guidedNoise = noisePred
+      if let loraPath = request.loraPath {
+        logger.info("Loading LoRA weights from: \(loraPath)")
+        let loraLoader = LoRALoader(logger: logger, hubApi: hubApi)
+        let loraWeights = try await loraLoader.loadLoRAWeights(from: loraPath)
+        applyLoRAWeights(to: transformer, loraWeights: loraWeights, loraScale: request.loraScale, logger: logger)
       }
 
-      guidedNoise = -guidedNoise
-      latents = scheduler.step(modelOutput: guidedNoise, timestepIndex: stepIndex, sample: latents)
-      MLX.eval(latents)
-      if let progress {
-        progress(stepIndex + 1, request.steps)
+      logger.info("Running \(request.steps) denoising steps...")
+      for stepIndex in 0..<request.steps {
+        let timestep = timestepsArray[stepIndex]
+        let normalizedTimestep = (1000.0 - timestep) / 1000.0
+        let timestepArray = MLXArray([normalizedTimestep], [1])
+
+        var modelLatents = latents
+        var embeds = promptEmbeds
+        if doCFG, let ne = negativeEmbeds {
+          modelLatents = MLX.concatenated([latents, latents], axis: 0)
+          embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
+        }
+
+        let noisePred = transformer.forward(latents: modelLatents, timestep: timestepArray, promptEmbeds: embeds)
+        var guidedNoise: MLXArray
+        if doCFG, negativeEmbeds != nil {
+          let batch = latents.dim(0)
+          let positive = noisePred[0 ..< batch, 0..., 0..., 0...]
+          let negative = noisePred[batch ..< batch * 2, 0..., 0..., 0...]
+          guidedNoise = positive + request.guidanceScale * (positive - negative)
+        } else {
+          guidedNoise = noisePred
+        }
+
+        guidedNoise = -guidedNoise
+        latents = scheduler.step(modelOutput: guidedNoise, timestepIndex: stepIndex, sample: latents)
+        MLX.eval(latents)
+        if let progress {
+          progress(stepIndex + 1, request.steps)
+        }
       }
+      // Clear any internal caches and release transformer
+      transformer.clearCache()
     }
 
     logger.info("Denoising complete, loading VAE...")
