@@ -194,7 +194,10 @@ public struct ZImageControlPipeline {
     #endif
   }
 
-  public func generate(_ request: ZImageControlGenerationRequest) async throws -> URL {
+  public func generate(
+    _ request: ZImageControlGenerationRequest,
+    progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil
+  ) async throws -> URL {
     logger.info("Requested Z-Image control generation")
 
     let snapshot = try await prepareSnapshot(model: request.model)
@@ -327,6 +330,9 @@ public struct ZImageControlPipeline {
       guidedNoise = -guidedNoise
       latents = scheduler.step(modelOutput: guidedNoise, timestepIndex: stepIndex, sample: latents)
       MLX.eval(latents)
+      if let progress {
+        progress(stepIndex + 1, request.steps)
+      }
     }
 
     logger.info("Denoising complete, decoding latents...")

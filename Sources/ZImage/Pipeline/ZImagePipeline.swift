@@ -133,7 +133,10 @@ public struct ZImagePipeline {
     return (embedsBatch, mask)
   }
 
-  public func generate(_ request: ZImageGenerationRequest) async throws -> URL {
+  public func generate(
+    _ request: ZImageGenerationRequest,
+    progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil
+  ) async throws -> URL {
     logger.info("Requested Z-Image generation")
     // Resolve model: allow single-file transformer override or non-structured dir
     var transformerOverrideURL: URL? = nil
@@ -310,6 +313,9 @@ public struct ZImagePipeline {
       guidedNoise = -guidedNoise
       latents = scheduler.step(modelOutput: guidedNoise, timestepIndex: stepIndex, sample: latents)
       MLX.eval(latents)
+      if let progress {
+        progress(stepIndex + 1, request.steps)
+      }
     }
 
     logger.info("Denoising complete, loading VAE...")

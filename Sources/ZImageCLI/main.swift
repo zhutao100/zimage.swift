@@ -4,6 +4,7 @@ import Logging
 import Metal
 import MLX
 import ZImage
+import Darwin
 
 #if canImport(CoreGraphics)
 import CoreGraphics
@@ -45,6 +46,7 @@ struct ZImageCLI {
     var loraScale: Float = 1.0
     var enhance = false
     var enhanceMaxTokens = 512
+    var noProgress = false
 
     let args = Array(CommandLine.arguments.dropFirst())
     var iterator = args.makeIterator()
@@ -81,6 +83,8 @@ struct ZImageCLI {
         enhance = true
       case "--enhance-max-tokens":
         enhanceMaxTokens = intValue(for: arg, iterator: &iterator, minimum: 64, fallback: 512)
+      case "--no-progress":
+        noProgress = true
       case "--help", "-h":
         printUsage()
         return
@@ -124,11 +128,24 @@ struct ZImageCLI {
 
     let pipeline = ZImagePipeline(logger: logger)
     let semaphore = DispatchSemaphore(value: 0)
+    // TTY-aware progress bar
+    let useBar = !noProgress && (isatty(STDERR_FILENO) != 0)
+    let bar = useBar ? ProgressBar(total: steps) : nil
+    let disableProgress = noProgress
     Task {
       do {
-        _ = try await pipeline.generate(request)
+        _ = try await pipeline.generate(request, progress: { completed, total in
+          if let bar {
+            bar.update(completed: completed)
+            if completed == total { bar.finish(forceNewline: true) }
+          } else if !disableProgress {
+            PlainProgress.shared.report(completed: completed, total: total)
+          }
+        })
+        if let bar { bar.finish() }
       } catch {
         logger.error("Generation failed: \(error)")
+        if let bar { bar.finish(forceNewline: true) }
       }
       semaphore.signal()
     }
@@ -155,6 +172,7 @@ struct ZImageCLI {
       --lora-scale           LoRA scale factor (default: 1.0)
       --enhance, -e          Enhance prompt using LLM before generation
       --enhance-max-tokens   Max tokens for prompt enhancement (default: 512)
+      --no-progress          Disable progress bar output
       --help, -h             Show help
 
     Subcommands:
@@ -286,6 +304,7 @@ struct ZImageCLI {
     var model: String?
     var cacheLimit: Int?
     var maxSequenceLength = 512
+    var noProgress = false
 
     var iterator = args.makeIterator()
     while let arg = iterator.next() {
@@ -318,6 +337,8 @@ struct ZImageCLI {
         cacheLimit = intValue(for: arg, iterator: &iterator, minimum: 1, fallback: 2048)
       case "--max-sequence-length":
         maxSequenceLength = intValue(for: arg, iterator: &iterator, minimum: 64, fallback: 512)
+      case "--no-progress":
+        noProgress = true
       case "--help", "-h":
         printControlUsage()
         return
@@ -374,12 +395,25 @@ struct ZImageCLI {
     let pipeline = ZImageControlPipeline(logger: logger)
     let semaphore = DispatchSemaphore(value: 0)
     let finalOutputPath = outputPath
+    // TTY-aware progress bar
+    let useBar = !noProgress && (isatty(STDERR_FILENO) != 0)
+    let bar = useBar ? ProgressBar(total: steps) : nil
+    let disableProgress = noProgress
     Task {
       do {
-        _ = try await pipeline.generate(request)
+        _ = try await pipeline.generate(request, progress: { completed, total in
+          if let bar {
+            bar.update(completed: completed)
+            if completed == total { bar.finish(forceNewline: true) }
+          } else if !disableProgress {
+            PlainProgress.shared.report(completed: completed, total: total)
+          }
+        })
+        if let bar { bar.finish() }
         logger.info("Output saved to: \(finalOutputPath)")
       } catch {
         logger.error("Control generation failed: \(error)")
+        if let bar { bar.finish(forceNewline: true) }
       }
       semaphore.signal()
     }
@@ -405,6 +439,7 @@ struct ZImageCLI {
       --model, -m               Model path or HuggingFace ID (default: \(ZImageRepository.id))
       --cache-limit             GPU memory cache limit in MB (default: unlimited)
       --max-sequence-length     Maximum sequence length for text encoding (default: 512)
+      --no-progress             Disable progress bar output
       --help, -h                Show help
 
     Control Types:
@@ -437,6 +472,101 @@ struct ZImageCLI {
     Float(nextValue(for: arg, iterator: &iterator)) ?? fallback
   }
 
+}
+
+// MARK: - Progress Helpers
+
+private final class PlainProgress {
+  static let shared = PlainProgress()
+  private var lastPercent: Int = -1
+  private var lastEmitTime: Date = .distantPast
+
+  func report(completed: Int, total: Int) {
+    guard total > 0 else { return }
+    let now = Date()
+    let percent = Int((Double(completed) / Double(total)) * 100.0)
+    if percent != lastPercent || now.timeIntervalSince(lastEmitTime) >= 0.5 {
+      FileHandle.standardError.write("Step \(completed)/\(total) (\(percent)%)\n".data(using: .utf8)!)
+      lastPercent = percent
+      lastEmitTime = now
+    }
+  }
+}
+
+private final class ProgressBar {
+  private let total: Int
+  private var startTime: Date?
+  private var lastStepTime: Date?
+  private var postWarmupDurations: [Double] = []
+  private let windowSize: Int = 5
+  private var lastRenderedPercent: Int = -1
+  private var isFinished: Bool = false
+
+  init(total: Int) { self.total = max(1, total) }
+
+  func update(completed: Int) {
+    if isFinished { return }
+    let now = Date()
+    if startTime == nil { startTime = now }
+
+    if let last = lastStepTime {
+      let dt = now.timeIntervalSince(last)
+      postWarmupDurations.append(dt)
+      if postWarmupDurations.count > windowSize { postWarmupDurations.removeFirst() }
+    }
+    lastStepTime = now
+
+    let percent = Int((Double(completed) / Double(total)) * 100.0)
+    if percent == lastRenderedPercent { return }
+    lastRenderedPercent = percent
+
+    let remaining = max(0, total - completed)
+    var etaSeconds: Double? = nil
+    if !postWarmupDurations.isEmpty {
+      let avg = postWarmupDurations.reduce(0, +) / Double(postWarmupDurations.count)
+      etaSeconds = avg * Double(remaining)
+    }
+
+    let barWidth = 28
+    let filled = Int((Double(completed) / Double(total)) * Double(barWidth))
+    let lead = (completed < total) ? ">" : "="
+    let bar = String(repeating: "=", count: max(0, filled - 1)) + lead + String(repeating: "-", count: max(0, barWidth - filled))
+
+    let etaStr: String
+    if let eta = etaSeconds { etaStr = format(seconds: eta) } else { etaStr = "estimating..." }
+
+    // Clear entire line, return carriage, then render
+    let prefix = "\r\u{001B}[2K"
+    let line = String(format: "[%@] %3d%%  %d/%d  ETA %@", bar, percent, completed, total, etaStr)
+    if let data = (prefix + line).data(using: .utf8) {
+      FileHandle.standardError.write(data)
+      fflush(stderr)
+    }
+  }
+
+  func finish(forceNewline: Bool = true) {
+    if isFinished { return }
+    isFinished = true
+    // Clear line and move to new line so logs don't overlay
+    if let data = ("\r\u{001B}[2K").data(using: .utf8) {
+      FileHandle.standardError.write(data)
+    }
+    if forceNewline, let nl = "\n".data(using: .utf8) {
+      FileHandle.standardError.write(nl)
+    }
+    fflush(stderr)
+  }
+
+  private func format(seconds: Double) -> String {
+    var s = Int(seconds.rounded())
+    let hours = s / 3600
+    s %= 3600
+    let minutes = s / 60
+    s %= 60
+    if hours > 0 { return String(format: "%dh %02dm %02ds", hours, minutes, s) }
+    if minutes > 0 { return String(format: "%dm %02ds", minutes, s) }
+    return String(format: "%ds", s)
+  }
 }
 
 try ZImageCLI.run()
