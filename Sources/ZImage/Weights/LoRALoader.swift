@@ -137,6 +137,11 @@ public struct LoRALoader {
       }
     }
 
+    // Map attention.out.* to attention.to_out.0.* to match module naming
+    if newKey.contains(".attention.out.") {
+      newKey = newKey.replacingOccurrences(of: ".attention.out.", with: ".attention.to_out.0.")
+    }
+
     // Handle LyCORIS LoKr keyspace -> Z-Image transformer modules
     // Patterns we handle:
     //   lycoris_transformer_blocks_{i}_attn_to_{q|k|v}.lokr_w{1|2}
@@ -258,6 +263,80 @@ public func applyLoRAWeights(
         }
 
         break
+      }
+
+      // Fallback: some LoRA packs store combined qkv deltas under attention.qkv.*
+      // If this module is to_q/to_k/to_v, try to find the qkv pair and slice.
+      if pattern.contains(".attention.to_q") || pattern.contains(".attention.to_k") || pattern.contains(".attention.to_v") {
+        var qkvPrefix: String? = nil
+        if let range = pattern.range(of: ".attention.to_q") {
+          qkvPrefix = pattern.replacingCharacters(in: range, with: ".attention.qkv")
+        } else if let range = pattern.range(of: ".attention.to_k") {
+          qkvPrefix = pattern.replacingCharacters(in: range, with: ".attention.qkv")
+        } else if let range = pattern.range(of: ".attention.to_v") {
+          qkvPrefix = pattern.replacingCharacters(in: range, with: ".attention.qkv")
+        }
+        if let qkvPrefix {
+          let qkvAKey = "\(qkvPrefix).lora_A.weight"
+          let qkvBKey = "\(qkvPrefix).lora_B.weight"
+          let qkvDownKey = "\(qkvPrefix).lora_down.weight"
+          let qkvUpKey = "\(qkvPrefix).lora_up.weight"
+          let a = loraWeights[qkvAKey] ?? loraWeights[qkvDownKey]
+          let b = loraWeights[qkvBKey] ?? loraWeights[qkvUpKey]
+          if let a, let b {
+            // Matmul yields [3*out, in]; select the slice for q/k/v
+            var targetOut: Int = -1
+            var targetIn: Int = -1
+            if let qlin = module as? QuantizedLinear {
+              targetOut = qlin.weight.dim(max(0, qlin.weight.ndim - 2))
+              targetIn = qlin.weight.dim(max(0, qlin.weight.ndim - 1))
+            } else if let lin = module as? Linear {
+              targetOut = lin.weight.dim(max(0, lin.weight.ndim - 2))
+              targetIn = lin.weight.dim(max(0, lin.weight.ndim - 1))
+            }
+            let deltaFull = matmul(b, a) // [3*out, in]
+            if deltaFull.ndim == 2 && deltaFull.dim(0) == targetOut * 3 && deltaFull.dim(1) == targetIn {
+              var offset = 0
+              if pattern.contains(".attention.to_k") { offset = targetOut }
+              if pattern.contains(".attention.to_v") { offset = targetOut * 2 }
+              let slice = deltaFull[offset ..< offset + targetOut, 0...]
+              if let quantizedLinear = module as? QuantizedLinear {
+                logger.debug("Applying qkv-sliced LoRA to quantized layer: \(key)")
+                let dequantizedWeight = dequantized(
+                  quantizedLinear.weight,
+                  scales: quantizedLinear.scales,
+                  biases: quantizedLinear.biases,
+                  groupSize: quantizedLinear.groupSize,
+                  bits: quantizedLinear.bits
+                )
+                var delta = slice
+                if delta.dtype != dequantizedWeight.dtype { delta = delta.asType(dequantizedWeight.dtype) }
+                let fusedWeight = dequantizedWeight + loraScale * delta
+                let fusedLinear = Linear(weight: fusedWeight, bias: quantizedLinear.bias)
+                let requantized = QuantizedLinear(
+                  fusedLinear,
+                  groupSize: quantizedLinear.groupSize,
+                  bits: quantizedLinear.bits
+                )
+                layerUpdates["\(key).weight"] = requantized.weight
+                layerUpdates["\(key).scales"] = requantized.scales
+                layerUpdates["\(key).biases"] = requantized.biases
+                appliedCount += 1
+                break
+              } else if let linear = module as? Linear {
+                logger.debug("Applying qkv-sliced LoRA to linear layer: \(key)")
+                var delta = slice
+                if delta.dtype != linear.weight.dtype { delta = delta.asType(linear.weight.dtype) }
+                let newWeight = linear.weight + loraScale * delta
+                layerUpdates["\(key).weight"] = newWeight
+                appliedCount += 1
+                break
+              }
+            } else {
+              logger.debug("Skipping qkv LoRA for \(key): delta (\(deltaFull.dim(0))x\(deltaFull.dim(1))) vs weight (\(targetOut)x\(targetIn))")
+            }
+          }
+        }
       }
 
       // LyCORIS LoKr keys
