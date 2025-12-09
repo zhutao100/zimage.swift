@@ -44,6 +44,21 @@ public struct ZImageWeightsMapper {
     return try loadStandardComponent(files: ZImageFiles.transformerWeights, dtype: dtype)
   }
 
+  /// Load transformer weights from a standalone safetensors file (override file)
+  public func loadTransformer(fromFile url: URL, dtype: DType? = .bfloat16) throws -> [String: MLXArray] {
+    var tensors: [String: MLXArray] = [:]
+    let reader = try SafeTensorsReader(fileURL: url)
+    for meta in reader.allMetadata() {
+      var tensor = try reader.tensor(named: meta.name)
+      if let targetDtype = dtype, tensor.dtype != targetDtype {
+        tensor = tensor.asType(targetDtype)
+      }
+      tensors[meta.name] = tensor
+    }
+    logger.info("Loaded \(tensors.count) transformer tensors from override file \(url.lastPathComponent)")
+    return tensors
+  }
+
   public func loadVAE(dtype: DType? = .bfloat16) throws -> [String: MLXArray] {
     if hasQuantization() {
       return try loadQuantizedComponent("vae")

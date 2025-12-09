@@ -135,8 +135,56 @@ public struct ZImagePipeline {
 
   public func generate(_ request: ZImageGenerationRequest) async throws -> URL {
     logger.info("Requested Z-Image generation")
+    // Resolve model: allow single-file transformer override or non-structured dir
+    var transformerOverrideURL: URL? = nil
+    var baseModelSpec: String? = nil
+    if let modelSpec = request.model {
+      let candidateURL = URL(fileURLWithPath: modelSpec)
+      var isDir: ObjCBool = false
+      if FileManager.default.fileExists(atPath: candidateURL.path, isDirectory: &isDir) {
+        if !isDir.boolValue && candidateURL.pathExtension == "safetensors" {
+          transformerOverrideURL = candidateURL
+          baseModelSpec = nil // use default base snapshot
+          logger.info("Using transformer override file: \(candidateURL.lastPathComponent)")
+        } else if isDir.boolValue {
+          // Check for expected structured snapshot
+          let required = [
+            ZImageFiles.transformerConfig,
+            ZImageFiles.textEncoderConfig,
+            ZImageFiles.vaeConfig
+          ]
+          let hasStructure = required.allSatisfy { FileManager.default.fileExists(atPath: candidateURL.appending(path: $0).path) }
+          if hasStructure {
+            baseModelSpec = modelSpec
+          } else {
+            // Try to find a transformer override file inside the directory
+            let contents = (try? FileManager.default.contentsOfDirectory(at: candidateURL, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+            let safes = contents.filter { $0.pathExtension == "safetensors" }
+            if safes.isEmpty {
+              logger.warning("Model path is a directory without expected configs or safetensors: \(modelSpec). Falling back to default model.")
+              baseModelSpec = nil
+            } else {
+              // Heuristic: prefer filename containing "v2", else the largest file
+              let preferred = safes.first(where: { $0.lastPathComponent.lowercased().contains("v2") }) ?? (safes.max(by: { (a, b) -> Bool in
+                let sa = (try? a.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                let sb = (try? b.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                return sa < sb
+              }))
+              transformerOverrideURL = preferred
+              baseModelSpec = nil
+              if let file = preferred { logger.info("Using transformer override file from directory: \(file.lastPathComponent)") }
+            }
+          }
+        } else {
+          baseModelSpec = modelSpec
+        }
+      } else {
+        // Treat as HF model id (structured). Leave resolution to prepareSnapshot.
+        baseModelSpec = modelSpec
+      }
+    }
 
-    let snapshot = try await prepareSnapshot(model: request.model)
+    let snapshot = try await prepareSnapshot(model: baseModelSpec)
     let modelConfigs = try ZImageModelConfigs.load(from: snapshot)
     let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
     let quantManifest = weightsMapper.loadQuantizationManifest()
@@ -188,8 +236,21 @@ public struct ZImagePipeline {
 
     logger.info("Loading transformer...")
     let transformer = try loadTransformer(snapshot: snapshot, config: modelConfigs.transformer)
-    let transformerWeights = try weightsMapper.loadTransformer()
-    ZImageWeightsMapping.applyTransformer(weights: transformerWeights, to: transformer, manifest: quantManifest, logger: logger)
+    // Always load base transformer weights first to ensure all required modules (x_embedder, final_layer, cap_embedder) are initialized
+    let baseTransformerWeights = try weightsMapper.loadTransformer()
+    ZImageWeightsMapping.applyTransformer(weights: baseTransformerWeights, to: transformer, manifest: quantManifest, logger: logger)
+
+    // If an override file is provided, overlay matching tensors (e.g., layers.*, context_refiner.*)
+    if let overrideURL = transformerOverrideURL {
+      logger.info("Overriding transformer weights from: \(overrideURL.lastPathComponent)")
+      var overrideWeights = try weightsMapper.loadTransformer(fromFile: overrideURL)
+      if let inferredDim = inferTransformerDim(from: overrideWeights), inferredDim != modelConfigs.transformer.dim {
+        throw PipelineError.weightsMissing("Transformer override dim \(inferredDim) mismatches model dim \(modelConfigs.transformer.dim)")
+      }
+      // Canonicalize keys from packed qkv/out to separate projections to match our module names
+      overrideWeights = canonicalizeTransformerOverride(overrideWeights, dim: modelConfigs.transformer.dim, logger: logger)
+      ZImageWeightsMapping.applyTransformer(weights: overrideWeights, to: transformer, manifest: nil, logger: logger)
+    }
 
     if let loraPath = request.loraPath {
       logger.info("Loading LoRA weights from: \(loraPath)")
@@ -312,6 +373,60 @@ public struct ZImagePipeline {
     let m = (maxShift - baseShift) / Float(maxSeqLen - baseSeqLen)
     let b = baseShift - m * Float(baseSeqLen)
     return Float(imageSeqLen) * m + b
+  }
+
+  private func inferTransformerDim(from weights: [String: MLXArray]) -> Int? {
+    // Try common norm vectors first
+    if let w = weights["layers.0.attention_norm1.weight"], w.ndim == 1 { return w.dim(0) }
+    if let w = weights["layers.0.ffn_norm1.weight"], w.ndim == 1 { return w.dim(0) }
+    // Try attention projections
+    if let w = weights["layers.0.attention.to_q.weight"], w.ndim == 2 { return w.dim(0) }
+    if let w = weights["layers.0.attention.to_out.0.weight"], w.ndim == 2 { return w.dim(1) }
+    // Scan for any norm weight
+    if let (k, w) = weights.first(where: { $0.key.hasSuffix("attention_norm1.weight") && $0.value.ndim == 1 }) { _ = k; return w.dim(0) }
+    if let (k, w) = weights.first(where: { $0.key.hasSuffix("ffn_norm1.weight") && $0.value.ndim == 1 }) { _ = k; return w.dim(0) }
+    return nil
+  }
+
+  private func canonicalizeTransformerOverride(_ weights: [String: MLXArray], dim: Int, logger: Logger) -> [String: MLXArray] {
+    var out: [String: MLXArray] = [:]
+    for (k, v) in weights {
+      // Map attention.out.weight -> attention.to_out.0.weight
+      if k.hasSuffix(".attention.out.weight") {
+        let newKey = k.replacingOccurrences(of: ".attention.out.weight", with: ".attention.to_out.0.weight")
+        out[newKey] = v
+        continue
+      }
+
+      // Split attention.qkv.weight -> to_q.weight, to_k.weight, to_v.weight
+      if k.hasSuffix(".attention.qkv.weight") {
+        if v.ndim == 2 && v.dim(0) == dim * 3 && v.dim(1) == dim {
+          let q = v[0 ..< dim, 0...]
+          let kW = v[dim ..< 2*dim, 0...]
+          let vW = v[2*dim ..< 3*dim, 0...]
+          let base = k.replacingOccurrences(of: ".attention.qkv.weight", with: "")
+          out["\(base).attention.to_q.weight"] = q
+          out["\(base).attention.to_k.weight"] = kW
+          out["\(base).attention.to_v.weight"] = vW
+        } else {
+          logger.warning("Unexpected qkv shape for \(k): \(v.shape) (expected [\(dim*3), \(dim)])")
+        }
+        continue
+      }
+
+      // Passthrough other keys
+      var mapped = k
+      // Remap final_layer.* -> all_final_layer.2-1.* so our loader can pick them up
+      if mapped.hasPrefix("final_layer.") {
+        mapped = mapped.replacingOccurrences(of: "final_layer.", with: "all_final_layer.2-1.")
+      }
+      // Remap x_embedder.* -> all_x_embedder.2-1.*
+      if mapped.hasPrefix("x_embedder.") {
+        mapped = mapped.replacingOccurrences(of: "x_embedder.", with: "all_x_embedder.2-1.")
+      }
+      out[mapped] = v
+    }
+    return out
   }
 
 }
