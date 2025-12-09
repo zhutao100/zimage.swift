@@ -202,6 +202,22 @@ public func applyLoRAWeights(
       let loraB = loraWeights[loraBKey] ?? loraWeights[loraBKeyAlt]
 
       if let loraA = loraA, let loraB = loraB {
+        // Fast shape guard before heavy ops
+        let outDim = loraB.dim(max(0, loraB.ndim - 2)) // rows of B
+        let inDim = loraA.dim(max(0, loraA.ndim - 1))  // cols of A
+        var targetOut: Int = -1
+        var targetIn: Int = -1
+        if let qlin = module as? QuantizedLinear {
+          targetOut = qlin.weight.dim(max(0, qlin.weight.ndim - 2))
+          targetIn = qlin.weight.dim(max(0, qlin.weight.ndim - 1))
+        } else if let lin = module as? Linear {
+          targetOut = lin.weight.dim(max(0, lin.weight.ndim - 2))
+          targetIn = lin.weight.dim(max(0, lin.weight.ndim - 1))
+        }
+        if targetOut > 0 && targetIn > 0 && (outDim != targetOut || inDim != targetIn) {
+          logger.debug("Skipping LoRA pair for \(key): delta (\(outDim)x\(inDim)) vs weight (\(targetOut)x\(targetIn))")
+          continue
+        }
         if let quantizedLinear = module as? QuantizedLinear {
           logger.debug("Applying LoRA to quantized layer: \(key)")
 
@@ -267,6 +283,23 @@ public func applyLoRAWeights(
           // Broadcast multiply then reshape
           let prod = aExp * bExp
           return prod.reshaped(a0 * b0, a1 * b1)
+        }
+
+        // Fast shape guard against module weight before computing kron
+        let outDim = w1.dim(0) * w2.dim(0)
+        let inDim = w1.dim(1) * w2.dim(1)
+        var targetOut: Int = -1
+        var targetIn: Int = -1
+        if let qlin = module as? QuantizedLinear {
+          targetOut = qlin.weight.dim(max(0, qlin.weight.ndim - 2))
+          targetIn = qlin.weight.dim(max(0, qlin.weight.ndim - 1))
+        } else if let lin = module as? Linear {
+          targetOut = lin.weight.dim(max(0, lin.weight.ndim - 2))
+          targetIn = lin.weight.dim(max(0, lin.weight.ndim - 1))
+        }
+        if targetOut > 0 && targetIn > 0 && (outDim != targetOut || inDim != targetIn) {
+          logger.debug("Skipping LoKr for \(key): kron (\(outDim)x\(inDim)) vs weight (\(targetOut)x\(targetIn))")
+          continue
         }
 
         if let quantizedLinear = module as? QuantizedLinear {
