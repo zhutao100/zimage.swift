@@ -14,22 +14,29 @@ public struct LoRALoader {
   }
 
   public func loadLoRAWeights(from loraPath: String, dtype: DType = .bfloat16) async throws -> [String: MLXArray] {
-    let loraDirectory: URL
-
+    // Resolve local file/dir vs remote repo
     if FileManager.default.fileExists(atPath: loraPath) {
-      loraDirectory = URL(fileURLWithPath: loraPath)
-      logger.info("Loading LoRA from local path: \(loraPath)")
-    } else {
-      logger.info("Downloading LoRA from HuggingFace: \(loraPath)")
-      let repo = Hub.Repo(id: loraPath)
-      loraDirectory = try await hubApi.snapshot(
-        from: repo,
-        matching: ["*.safetensors"]
-      ) { progress in
-        let percent = Int(progress.fractionCompleted * 100)
-        if percent % 20 == 0 {
-          self.logger.info("LoRA download: \(percent)%")
-        }
+      let url = URL(fileURLWithPath: loraPath)
+      let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+      if !isDir && url.pathExtension == "safetensors" {
+        logger.info("Loading LoRA from file: \(url.lastPathComponent)")
+        return try Self.loadLoRAWeights(fileURL: url, dtype: dtype, logger: logger)
+      } else {
+        logger.info("Loading LoRA from directory: \(url.path)")
+        return try Self.loadLoRAWeights(directory: url, dtype: dtype, logger: logger)
+      }
+    }
+
+    // Otherwise, treat as a HuggingFace repo id
+    logger.info("Downloading LoRA from HuggingFace: \(loraPath)")
+    let repo = Hub.Repo(id: loraPath)
+    let loraDirectory = try await hubApi.snapshot(
+      from: repo,
+      matching: ["*.safetensors"]
+    ) { progress in
+      let percent = Int(progress.fractionCompleted * 100)
+      if percent % 20 == 0 {
+        self.logger.info("LoRA download: \(percent)%")
       }
     }
 
@@ -40,7 +47,7 @@ public struct LoRALoader {
     var loraWeights = [String: MLXArray]()
 
     guard let enumerator = FileManager.default.enumerator(
-      at: directory, includingPropertiesForKeys: nil
+      at: directory, includingPropertiesForKeys: [.isRegularFileKey]
     ) else {
       throw LoRAError.directoryNotFound(directory.path)
     }
@@ -48,20 +55,57 @@ public struct LoRALoader {
     for case let url as URL in enumerator {
       if url.pathExtension == "safetensors" {
         logger.info("Loading LoRA weights from: \(url.lastPathComponent)")
-        let weights = try MLX.loadArrays(url: url)
-        for (key, value) in weights {
-          let newKey = remapWeightKey(key)
-          if value.dtype != dtype {
-            loraWeights[newKey] = value.asType(dtype)
-          } else {
-            loraWeights[newKey] = value
-          }
-        }
+        let fileWeights = try loadLoRAWeights(fileURL: url, dtype: dtype, logger: logger)
+        for (k, v) in fileWeights { loraWeights[k] = v }
       }
     }
 
     logger.info("Loaded \(loraWeights.count) LoRA tensors")
     return loraWeights
+  }
+
+  private static func loadLoRAWeights(fileURL: URL, dtype: DType, logger: Logger) throws -> [String: MLXArray] {
+    // Prefer SafeTensorsReader for robustness and to inspect keys for variant detection
+    let reader = try SafeTensorsReader(fileURL: fileURL)
+    let names = reader.tensorNames
+
+    // Detect format
+    let hasLycoris = names.contains { $0.contains("lycoris_") || $0.contains(".lokr_w1") || $0.contains(".lokr_w2") }
+    let hasStandard = names.contains { $0.contains(".lora_A.weight") || $0.contains(".lora_B.weight") || $0.contains(".lora_down.weight") || $0.contains(".lora_up.weight") }
+
+    if hasLycoris {
+      logger.info("Detected LoRA format: LyCORIS/LoKr in \(fileURL.lastPathComponent)")
+    } else if hasStandard {
+      logger.info("Detected LoRA format: Standard LoRA in \(fileURL.lastPathComponent)")
+    } else {
+      logger.warning("Unknown LoRA format for \(fileURL.lastPathComponent); attempting generic load")
+    }
+
+    var results: [String: MLXArray] = [:]
+
+    if hasLycoris {
+      // Remap LyCORIS keys to module paths and normalize dtype
+      for name in names {
+        // Only keep lokr matrices and optional alpha scalars
+        if name.hasSuffix(".lokr_w1") || name.hasSuffix(".lokr_w2") || name.hasSuffix(".alpha") {
+          let tensor = try reader.tensor(named: name)
+          let newKey = remapWeightKey(name)
+          let value = tensor.dtype == dtype ? tensor : tensor.asType(dtype)
+          results[newKey] = value
+        }
+      }
+      logger.info("Remapped LyCORIS tensors: \(results.count)")
+      return results
+    }
+
+    // Fallback: standard LoRA-style keys
+    for name in names {
+      let tensor = try reader.tensor(named: name)
+      let newKey = remapWeightKey(name)
+      let value = tensor.dtype == dtype ? tensor : tensor.asType(dtype)
+      results[newKey] = value
+    }
+    return results
   }
 
   internal static func remapWeightKey(_ key: String) -> String {
@@ -93,6 +137,37 @@ public struct LoRALoader {
       }
     }
 
+    // Handle LyCORIS LoKr keyspace -> Z-Image transformer modules
+    // Patterns we handle:
+    //   lycoris_transformer_blocks_{i}_attn_to_{q|k|v}.lokr_w{1|2}
+    //   lycoris_transformer_blocks_{i}_attn_to_out_0.lokr_w{1|2}
+    if newKey.hasPrefix("lycoris_transformer_blocks_") {
+      // Extract layer index
+      let prefix = "lycoris_transformer_blocks_"
+      let remainder = String(newKey.dropFirst(prefix.count))
+      // remainder example: "0_attn_to_q.lokr_w1"
+      if let underscoreIndex = remainder.firstIndex(of: "_") {
+        let layerStr = String(remainder[..<underscoreIndex])
+        let after = String(remainder[remainder.index(after: underscoreIndex)...])
+        if let layerIdx = Int(layerStr) {
+          // Attention projections
+          if after.hasPrefix("attn_to_q") {
+            let suffix = String(after.dropFirst("attn_to_q".count)) // e.g. ".lokr_w1"
+            return "layers.\(layerIdx).attention.to_q\(suffix)"
+          } else if after.hasPrefix("attn_to_k") {
+            let suffix = String(after.dropFirst("attn_to_k".count))
+            return "layers.\(layerIdx).attention.to_k\(suffix)"
+          } else if after.hasPrefix("attn_to_v") {
+            let suffix = String(after.dropFirst("attn_to_v".count))
+            return "layers.\(layerIdx).attention.to_v\(suffix)"
+          } else if after.hasPrefix("attn_to_out_0") {
+            let suffix = String(after.dropFirst("attn_to_out_0".count))
+            return "layers.\(layerIdx).attention.to_out.0\(suffix)"
+          }
+        }
+      }
+    }
+
     return newKey
   }
 }
@@ -105,6 +180,7 @@ public func applyLoRAWeights(
 ) {
   var layerUpdates: [String: MLXArray] = [:]
   var appliedCount = 0
+  var appliedLoKrCount = 0
 
   for (key, module) in transformer.namedModules() {
     // Try different key patterns for LoRA weights
@@ -116,6 +192,7 @@ public func applyLoRAWeights(
     ]
 
     for pattern in keyPatterns {
+      // Standard LoRA keys
       let loraAKey = "\(pattern).lora_A.weight"
       let loraBKey = "\(pattern).lora_B.weight"
       let loraAKeyAlt = "\(pattern).lora_down.weight"
@@ -166,13 +243,78 @@ public func applyLoRAWeights(
 
         break
       }
+
+      // LyCORIS LoKr keys
+      let lokrW1Key = "\(pattern).lokr_w1"
+      let lokrW2Key = "\(pattern).lokr_w2"
+      if let w1 = loraWeights[lokrW1Key], let w2 = loraWeights[lokrW2Key] {
+        // Optional alpha per-module
+        let alphaKey = "\(pattern).alpha"
+        var alphaScale: Float = 1.0
+        if let alpha = loraWeights[alphaKey] {
+          if let v = alpha.asArray(Float.self).first {
+              alphaScale = v
+          }
+        }
+
+        // Compute Kronecker product delta with layout [a*c, b*d]
+        func kron2D(_ a: MLXArray, _ b: MLXArray) -> MLXArray {
+          precondition(a.ndim == 2 && b.ndim == 2, "LoKr expects 2D matrices for Linear layers")
+          let a0 = a.dim(0), a1 = a.dim(1)
+          let b0 = b.dim(0), b1 = b.dim(1)
+          var aExp = a.reshaped(a0, 1, a1, 1)
+          var bExp = b.reshaped(1, b0, 1, b1)
+          // Broadcast multiply then reshape
+          let prod = aExp * bExp
+          return prod.reshaped(a0 * b0, a1 * b1)
+        }
+
+        if let quantizedLinear = module as? QuantizedLinear {
+          logger.debug("Applying LoKr to quantized layer: \(key)")
+          let dequantizedWeight = dequantized(
+            quantizedLinear.weight,
+            scales: quantizedLinear.scales,
+            biases: quantizedLinear.biases,
+            groupSize: quantizedLinear.groupSize,
+            bits: quantizedLinear.bits
+          )
+
+          var delta = kron2D(w1, w2)
+          if delta.dtype != dequantizedWeight.dtype { delta = delta.asType(dequantizedWeight.dtype) }
+          let fusedWeight = dequantizedWeight + (loraScale * alphaScale) * delta
+
+          let fusedLinear = Linear(weight: fusedWeight, bias: quantizedLinear.bias)
+          let requantized = QuantizedLinear(
+            fusedLinear,
+            groupSize: quantizedLinear.groupSize,
+            bits: quantizedLinear.bits
+          )
+          layerUpdates["\(key).weight"] = requantized.weight
+          layerUpdates["\(key).scales"] = requantized.scales
+          layerUpdates["\(key).biases"] = requantized.biases
+          appliedLoKrCount += 1
+        } else if let linear = module as? Linear {
+          logger.debug("Applying LoKr to linear layer: \(key)")
+          var delta = kron2D(w1, w2)
+          if delta.dtype != linear.weight.dtype { delta = delta.asType(linear.weight.dtype) }
+          let newWeight = linear.weight + (loraScale * alphaScale) * delta
+          layerUpdates["\(key).weight"] = newWeight
+          appliedLoKrCount += 1
+        }
+
+        break
+      }
     }
   }
 
   if !layerUpdates.isEmpty {
     do {
       try transformer.update(parameters: ModuleParameters.unflattened(layerUpdates), verify: [.shapeMismatch])
-      logger.info("Applied LoRA weights to \(appliedCount) layers")
+      if appliedLoKrCount > 0 {
+        logger.info("Applied LoRA weights to \(appliedCount) layers; LoKr applied to \(appliedLoKrCount) layers")
+      } else {
+        logger.info("Applied LoRA weights to \(appliedCount) layers")
+      }
     } catch {
       logger.error("Failed to apply LoRA weights: \(error)")
     }
