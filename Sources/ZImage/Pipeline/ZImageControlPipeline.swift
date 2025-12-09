@@ -545,6 +545,9 @@ public class ZImageControlPipeline {
     }
     if currentLoRA != nil {
       logger.info("Clearing previous LoRA...")
+      if let lora = currentLoRA, let config = currentLoRAConfig, lora.hasLoKr {
+        LoRAApplicator.removeLoKr(from: transformer, loraWeights: lora, scale: config.scale, logger: logger)
+      }
       LoRAApplicator.clearDynamicLoRA(from: transformer, logger: logger)
       currentLoRA = nil
       currentLoRAConfig = nil
@@ -562,6 +565,9 @@ public class ZImageControlPipeline {
   public func unloadLoRA() {
     guard let transformer = self.transformer else { return }
     if currentLoRA != nil {
+      if let lora = currentLoRA, let config = currentLoRAConfig, lora.hasLoKr {
+        LoRAApplicator.removeLoKr(from: transformer, loraWeights: lora, scale: config.scale, logger: logger)
+      }
       LoRAApplicator.clearDynamicLoRA(from: transformer, logger: logger)
       currentLoRA = nil
       currentLoRAConfig = nil

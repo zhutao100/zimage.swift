@@ -8,6 +8,11 @@ public final class LoRAWeightLoader {
         (".lora_down.", ".lora_up."),
         (".lora_A.", ".lora_B.")
     ]
+    private enum LoKrSuffix: String {
+        case w1 = ".lokr_w1"
+        case w2 = ".lokr_w2"
+        case alpha = ".alpha"
+    }
 
     private static let prefixesToRemove = [
         "base_model.model.",
@@ -24,36 +29,50 @@ public final class LoRAWeightLoader {
     }
 
     public static func load(from url: URL) throws -> LoRAWeights {
-        guard FileManager.default.fileExists(atPath: url.path) else {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
             throw LoRAError.fileNotFound(url.path)
         }
 
-        let allWeights = try MLX.loadArrays(url: url)
-        var loraWeights: [String: (down: MLXArray, up: MLXArray)] = [:]
-        var processedKeys = Set<String>()
-
-        for key in allWeights.keys {
-            if processedKeys.contains(key) { continue }
-
-            guard let (downKey, upKey, baseKey) = resolveKeyPair(key) else { continue }
-            guard let downWeight = allWeights[downKey],
-                  let upWeight = allWeights[upKey] else { continue }
-
-            let mappedKey = LoRAKeyMapper.mapToZImageKey(baseKey)
-            loraWeights[mappedKey] = (down: downWeight, up: upWeight)
-
-            processedKeys.insert(downKey)
-            processedKeys.insert(upKey)
+        let safetensorFiles: [URL]
+        let configDirectory: URL
+        if isDirectory.boolValue {
+            safetensorFiles = try findSafetensorFiles(in: url)
+            configDirectory = url
+        } else {
+            safetensorFiles = [url]
+            configDirectory = url.deletingLastPathComponent()
         }
 
-        guard !loraWeights.isEmpty else {
-            throw LoRAError.invalidFormat("No valid LoRA weight pairs found. Expected keys with .lora_down/.lora_up or .lora_A/.lora_B patterns.")
+        var loraWeights: [String: (down: MLXArray, up: MLXArray)] = [:]
+        var lokrW1: [String: MLXArray] = [:]
+        var lokrW2: [String: MLXArray] = [:]
+        var lokrAlpha: [String: Float] = [:]
+
+        for fileURL in safetensorFiles {
+            let partial = try loadSafetensorFile(fileURL)
+            for (k, v) in partial.loraPairs { loraWeights[k] = v }
+            for (k, v) in partial.lokrW1 { lokrW1[k] = v }
+            for (k, v) in partial.lokrW2 { lokrW2[k] = v }
+            for (k, v) in partial.lokrAlpha { lokrAlpha[k] = v }
+        }
+
+        var lokrWeights: [String: LoKrWeights] = [:]
+        lokrWeights.reserveCapacity(min(lokrW1.count, lokrW2.count))
+        for (key, w1) in lokrW1 {
+            guard let w2 = lokrW2[key] else { continue }
+            lokrWeights[key] = LoKrWeights(w1: w1, w2: w2, alpha: lokrAlpha[key])
+        }
+
+        guard !loraWeights.isEmpty || !lokrWeights.isEmpty else {
+            throw LoRAError.invalidFormat("No valid LoRA weight pairs found. Expected keys with .lora_down/.lora_up, .lora_A/.lora_B, or LyCORIS LoKr (.lokr_w1/.lokr_w2).")
         }
 
         let rank = inferRank(from: loraWeights)
-        let alpha = loadAlpha(from: url.deletingLastPathComponent())
+        let alpha = loadAlpha(from: configDirectory)
 
-        return LoRAWeights(weights: loraWeights, rank: rank, alpha: alpha)
+        return LoRAWeights(weights: loraWeights, lokrWeights: lokrWeights, rank: rank, alpha: alpha)
     }
 
     public static func resolveSource(_ source: LoRASource) async throws -> URL {
@@ -75,14 +94,15 @@ public final class LoRAWeightLoader {
         }
 
         do {
-            let allWeights = try MLX.loadArrays(url: url)
-            let keys = Array(allWeights.keys)
+            let reader = try SafeTensorsReader(fileURL: url)
+            let keys = reader.tensorNames
 
             let hasDownWeights = keys.contains { key in loraPatterns.contains { key.contains($0.down) } }
             let hasUpWeights = keys.contains { key in loraPatterns.contains { key.contains($0.up) } }
+            let hasLoKr = keys.contains { $0.hasSuffix(LoKrSuffix.w1.rawValue) || $0.hasSuffix(LoKrSuffix.w2.rawValue) }
 
-            guard hasDownWeights && hasUpWeights else {
-                return .invalid("Not a valid LoRA file: missing lora_down/lora_up weight pairs")
+            guard (hasDownWeights && hasUpWeights) || hasLoKr else {
+                return .invalid("Not a valid LoRA file: missing lora_down/lora_up weight pairs or lokr_w1/lokr_w2 tensors")
             }
 
             var targetLayers: [String] = []
@@ -91,7 +111,7 @@ public final class LoRAWeightLoader {
             for key in keys {
                 let matchedDownPattern = loraPatterns.first { key.contains($0.down) }?.down
                 guard let downPattern = matchedDownPattern,
-                      let tensor = allWeights[key] else { continue }
+                      let tensor = try? reader.tensor(named: key) else { continue }
 
                 let layerName = extractBaseKey(key, pattern: downPattern) ?? key
                 targetLayers.append(layerName)
@@ -195,5 +215,120 @@ public final class LoRAWeightLoader {
         } catch {
             throw LoRAError.downloadFailed(modelId, error)
         }
+    }
+
+    private struct PartialLoRAWeights {
+        let loraPairs: [String: (down: MLXArray, up: MLXArray)]
+        let lokrW1: [String: MLXArray]
+        let lokrW2: [String: MLXArray]
+        let lokrAlpha: [String: Float]
+    }
+
+    private static func loadSafetensorFile(_ url: URL) throws -> PartialLoRAWeights {
+        let reader = try SafeTensorsReader(fileURL: url)
+        let keys = reader.tensorNames
+
+        var processedKeys = Set<String>()
+        var loraPairs: [String: (down: MLXArray, up: MLXArray)] = [:]
+        var lokrW1: [String: MLXArray] = [:]
+        var lokrW2: [String: MLXArray] = [:]
+        var lokrAlpha: [String: Float] = [:]
+
+        for key in keys {
+            if processedKeys.contains(key) { continue }
+
+            if let (moduleKey, suffix) = mapLoKrModuleKey(key) {
+                switch suffix {
+                case .w1:
+                    lokrW1[moduleKey] = try reader.tensor(named: key)
+                case .w2:
+                    lokrW2[moduleKey] = try reader.tensor(named: key)
+                case .alpha:
+                    let tensor = try reader.tensor(named: key)
+                    if let value = tensor.asArray(Float.self).first {
+                        lokrAlpha[moduleKey] = value
+                    }
+                }
+                continue
+            }
+
+            guard let (downKey, upKey, baseKey) = resolveKeyPair(key) else { continue }
+            guard reader.contains(downKey), reader.contains(upKey) else { continue }
+
+            let downWeight = try reader.tensor(named: downKey)
+            let upWeight = try reader.tensor(named: upKey)
+
+            let mappedKey = LoRAKeyMapper.mapToZImageKey(baseKey)
+            loraPairs[mappedKey] = (down: downWeight, up: upWeight)
+
+            processedKeys.insert(downKey)
+            processedKeys.insert(upKey)
+        }
+
+        return PartialLoRAWeights(
+            loraPairs: loraPairs,
+            lokrW1: lokrW1,
+            lokrW2: lokrW2,
+            lokrAlpha: lokrAlpha
+        )
+    }
+
+    private static func findSafetensorFiles(in directory: URL) throws -> [URL] {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]) else {
+            throw LoRAError.noSafetensorsFound(directory)
+        }
+
+        var results: [URL] = []
+        for case let url as URL in enumerator {
+            if url.pathExtension == "safetensors" {
+                results.append(url)
+            }
+        }
+        if results.isEmpty {
+            throw LoRAError.noSafetensorsFound(directory)
+        }
+        return results.sorted(by: { $0.path < $1.path })
+    }
+
+    private static func mapLoKrModuleKey(_ key: String) -> (moduleKey: String, suffix: LoKrSuffix)? {
+        let suffix: LoKrSuffix
+        if key.hasSuffix(LoKrSuffix.w1.rawValue) {
+            suffix = .w1
+        } else if key.hasSuffix(LoKrSuffix.w2.rawValue) {
+            suffix = .w2
+        } else if key.hasSuffix(LoKrSuffix.alpha.rawValue) {
+            suffix = .alpha
+        } else {
+            return nil
+        }
+
+        if key.hasPrefix("lycoris_transformer_blocks_") {
+            let prefix = "lycoris_transformer_blocks_"
+            let remainder = String(key.dropFirst(prefix.count))
+            guard let underscoreIndex = remainder.firstIndex(of: "_") else { return nil }
+            let layerStr = String(remainder[..<underscoreIndex])
+            guard let layerIdx = Int(layerStr) else { return nil }
+
+            let after = String(remainder[remainder.index(after: underscoreIndex)...])
+            if after.hasPrefix("attn_to_q") {
+                return ("layers.\(layerIdx).attention.to_q", suffix)
+            }
+            if after.hasPrefix("attn_to_k") {
+                return ("layers.\(layerIdx).attention.to_k", suffix)
+            }
+            if after.hasPrefix("attn_to_v") {
+                return ("layers.\(layerIdx).attention.to_v", suffix)
+            }
+            if after.hasPrefix("attn_to_out_0") {
+                return ("layers.\(layerIdx).attention.to_out.0", suffix)
+            }
+            return nil
+        }
+
+        let base = String(key.dropLast(suffix.rawValue.count))
+        let mapped = LoRAKeyMapper.mapToZImageKey(base)
+        guard mapped.hasSuffix(".weight") else { return nil }
+        return (String(mapped.dropLast(".weight".count)), suffix)
     }
 }

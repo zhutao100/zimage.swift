@@ -43,11 +43,18 @@ public struct LoRAConfiguration: Sendable, Equatable {
 }
 public struct LoRAWeights: @unchecked Sendable {
     public let weights: [String: (down: MLXArray, up: MLXArray)]
+    public let lokrWeights: [String: LoKrWeights]
     public let rank: Int
     public let alpha: Float
 
-    public init(weights: [String: (down: MLXArray, up: MLXArray)], rank: Int, alpha: Float? = nil) {
+    public init(
+        weights: [String: (down: MLXArray, up: MLXArray)],
+        lokrWeights: [String: LoKrWeights] = [:],
+        rank: Int,
+        alpha: Float? = nil
+    ) {
         self.weights = weights
+        self.lokrWeights = lokrWeights
         self.rank = rank
         self.alpha = alpha ?? Float(rank)
     }
@@ -59,6 +66,26 @@ public struct LoRAWeights: @unchecked Sendable {
 
     public var layerCount: Int {
         weights.count
+    }
+
+    public var lokrLayerCount: Int {
+        lokrWeights.count
+    }
+
+    public var hasLoKr: Bool {
+        !lokrWeights.isEmpty
+    }
+}
+
+public struct LoKrWeights: @unchecked Sendable {
+    public let w1: MLXArray
+    public let w2: MLXArray
+    public let alpha: Float?
+
+    public init(w1: MLXArray, w2: MLXArray, alpha: Float? = nil) {
+        self.w1 = w1
+        self.w2 = w2
+        self.alpha = alpha
     }
 }
 

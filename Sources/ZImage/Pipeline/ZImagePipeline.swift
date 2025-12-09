@@ -113,6 +113,9 @@ public final class ZImagePipeline {
     guard currentLoRA != nil else { return }
 
     if let trans = transformer {
+      if let lora = currentLoRA, let config = currentLoRAConfig, lora.hasLoKr {
+        LoRAApplicator.removeLoKr(from: trans, loraWeights: lora, scale: config.scale, logger: logger)
+      }
 
       LoRAApplicator.clearDynamicLoRA(from: trans, logger: logger)
     }
