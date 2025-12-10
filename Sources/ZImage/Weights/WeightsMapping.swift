@@ -130,7 +130,7 @@ public struct ZImageWeightsMapping {
 
   public static func applyVAE(
     weights: [String: MLXArray],
-    to model: AutoencoderKL,
+    to model: Module,
     manifest: ZImageQuantizationManifest? = nil,
     logger: Logger
   ) {

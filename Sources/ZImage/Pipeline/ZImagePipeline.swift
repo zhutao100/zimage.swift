@@ -119,6 +119,21 @@ public struct ZImagePipeline {
     ))
   }
 
+  private func loadVAEDecoder(snapshot: URL, config: ZImageVAEConfig) throws -> AutoencoderDecoderOnly {
+    return AutoencoderDecoderOnly(configuration: .init(
+      inChannels: config.inChannels,
+      outChannels: config.outChannels,
+      latentChannels: config.latentChannels,
+      scalingFactor: config.scalingFactor,
+      shiftFactor: config.shiftFactor,
+      blockOutChannels: config.blockOutChannels,
+      layersPerBlock: config.layersPerBlock,
+      normNumGroups: config.normNumGroups,
+      sampleSize: config.sampleSize,
+      midBlockAddAttention: config.midBlockAddAttention
+    ))
+  }
+
   private func encodePrompt(_ prompt: String, tokenizer: QwenTokenizer, textEncoder: QwenTextEncoder, maxLength: Int) throws -> (MLXArray, MLXArray) {
     let encoded = try tokenizer.encodeChat(prompts: [prompt], maxLength: maxLength)
     let embeddingsList = textEncoder.encodeForZImage(inputIds: encoded.inputIds, attentionMask: encoded.attentionMask)
@@ -329,9 +344,10 @@ public struct ZImagePipeline {
     logger.info("Denoising complete, loading VAE...")
     GPU.clearCache()
 
-    let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
+    let vae = try loadVAEDecoder(snapshot: snapshot, config: modelConfigs.vae)
     let vaeWeights = try weightsMapper.loadVAE()
-    ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
+    let decoderOnly = vaeWeights.filter { $0.key.hasPrefix("decoder.") }
+    ZImageWeightsMapping.applyVAE(weights: decoderOnly, to: vae, manifest: quantManifest, logger: logger)
 
     let decoded = decodeLatents(latents, vae: vae, height: request.height, width: request.width)
     try QwenImageIO.saveImage(array: decoded, to: request.outputPath)
@@ -339,8 +355,8 @@ public struct ZImagePipeline {
     return request.outputPath
   }
 
-  private func decodeLatents(_ latents: MLXArray, vae: AutoencoderKL, height: Int, width: Int) -> MLXArray {
-    let (decoded, _) = vae.decode(latents)
+  private func decodeLatents(_ latents: MLXArray, vae: VAEImageDecoding, height: Int, width: Int) -> MLXArray {
+    let (decoded, _) = vae.decode(latents, return_dict: false)
     var image = decoded
     if height != decoded.dim(2) || width != decoded.dim(3) {
       var nhwc = image.transposed(0, 2, 3, 1)

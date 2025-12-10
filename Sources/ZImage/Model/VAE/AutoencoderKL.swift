@@ -292,10 +292,10 @@ private final class VAEMidBlock: Module {
   }
 }
 
-private final class VAEDecoder: Module {
+final class VAEDecoder: Module {
   @ModuleInfo(key: "conv_in") var convIn: Conv2d
-  @ModuleInfo(key: "mid_block") var midBlock: VAEMidBlock
-  @ModuleInfo(key: "up_blocks") var upBlocks: [VAEUpBlock]
+  @ModuleInfo(key: "mid_block") fileprivate var midBlock: VAEMidBlock
+  @ModuleInfo(key: "up_blocks") fileprivate var upBlocks: [VAEUpBlock]
   @ModuleInfo(key: "conv_norm_out") var convNormOut: GroupNorm
   @ModuleInfo(key: "conv_out") var convOut: Conv2d
 
