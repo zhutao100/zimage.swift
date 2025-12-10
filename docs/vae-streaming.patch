@@ -1,0 +1,115 @@
+diff --git a/Sources/ZImage/Pipeline/ZImageControlPipeline.swift b/Sources/ZImage/Pipeline/ZImageControlPipeline.swift
+index 09030bf..8a5af3f 100644
+--- a/Sources/ZImage/Pipeline/ZImageControlPipeline.swift
++++ b/Sources/ZImage/Pipeline/ZImageControlPipeline.swift
+@@ -238,8 +238,7 @@ public struct ZImageControlPipeline {
+ 
+     logger.info("Loading VAE...")
+     let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
+-    let vaeWeights = try weightsMapper.loadVAE()
+-    ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
++    try weightsMapper.applyVAEStreaming(to: vae, dtype: .bfloat16, logger: logger)
+ 
+     var controlContext: MLXArray? = nil
+     if let controlImageURL = request.controlImage {
+diff --git a/Sources/ZImage/Pipeline/ZImagePipeline.swift b/Sources/ZImage/Pipeline/ZImagePipeline.swift
+index 3537067..0c41fc2 100644
+--- a/Sources/ZImage/Pipeline/ZImagePipeline.swift
++++ b/Sources/ZImage/Pipeline/ZImagePipeline.swift
+@@ -306,8 +306,7 @@ public struct ZImagePipeline {
+     GPU.clearCache()
+ 
+     let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
+-    let vaeWeights = try weightsMapper.loadVAE()
+-    ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
++    try weightsMapper.applyVAEStreaming(to: vae, dtype: .bfloat16, logger: logger)
+ 
+     let decoded = decodeLatents(latents, vae: vae, height: request.height, width: request.width)
+     try QwenImageIO.saveImage(array: decoded, to: request.outputPath)
+diff --git a/Sources/ZImage/Weights/WeightsMapping.swift b/Sources/ZImage/Weights/WeightsMapping.swift
+index fbc420c..13febc9 100644
+--- a/Sources/ZImage/Weights/WeightsMapping.swift
++++ b/Sources/ZImage/Weights/WeightsMapping.swift
+@@ -143,7 +143,7 @@ public struct ZImageWeightsMapping {
+     applyToModule(model, weights: mapped, prefix: "vae", logger: logger)
+   }
+ 
+-  private static func applyToModule(_ module: Module, weights: [String: MLXArray], prefix: String, logger: Logger) {
++  static func applyToModule(_ module: Module, weights: [String: MLXArray], prefix: String, logger: Logger) {
+     let params = module.parameters().flattened()
+     var updates: [(String, MLXArray)] = []
+ 
+diff --git a/Sources/ZImage/Weights/ZImageWeightsMapper.swift b/Sources/ZImage/Weights/ZImageWeightsMapper.swift
+index 7ea71aa..4790ca8 100644
+--- a/Sources/ZImage/Weights/ZImageWeightsMapper.swift
++++ b/Sources/ZImage/Weights/ZImageWeightsMapper.swift
+@@ -66,6 +66,69 @@ public struct ZImageWeightsMapper {
+     return try loadStandardComponent(files: ZImageFiles.vaeWeights, dtype: dtype)
+   }
+ 
++  /// Stream VAE weights from safetensors and apply directly to the model to avoid
++  /// building large intermediate dictionaries and duplicated transposed copies.
++  public func applyVAEStreaming(
++    to model: AutoencoderKL,
++    dtype: DType? = .bfloat16,
++    logger: Logger
++  ) throws {
++    let fm = FileManager.default
++    let resolvedSnapshot = snapshot.resolvingSymlinksInPath()
++
++    // Prefer scanning the 'vae' directory for any safetensors
++    var files: [URL] = []
++    let vaeDir = resolvedSnapshot.appendingPathComponent("vae")
++    if fm.fileExists(atPath: vaeDir.path),
++       let contents = try? fm.contentsOfDirectory(at: vaeDir, includingPropertiesForKeys: nil) {
++      files = contents.filter { $0.pathExtension == "safetensors" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
++    }
++    // Fallback to configured relative paths
++    if files.isEmpty {
++      for rel in ZImageFiles.vaeWeights {
++        let url = resolvedSnapshot.appending(path: rel)
++        if fm.fileExists(atPath: url.path) { files.append(url) }
++      }
++    }
++
++    guard !files.isEmpty else {
++      logger.warning("No VAE safetensors found for streaming apply")
++      return
++    }
++
++    // Build a quick index of parameter keys to accelerate matching
++    let flatParams = model.parameters().flattened()
++    var paramKeySet: Set<String> = []
++    paramKeySet.reserveCapacity(flatParams.count * 2)
++    for (k, _) in flatParams { paramKeySet.insert(k); paramKeySet.insert("vae.\(k)") }
++
++    for file in files {
++      let reader = try SafeTensorsReader(fileURL: file)
++      let metas = reader.allMetadata()
++      logger.info("Streaming VAE weights from \(file.lastPathComponent) (\(metas.count) tensors)")
++
++      // Apply tensors one by one to avoid building large maps
++      for meta in metas {
++        let name = meta.name
++        var tensor = try reader.tensor(named: name)
++        if let targetDtype = dtype, tensor.dtype != targetDtype {
++          tensor = tensor.asType(targetDtype)
++        }
++        if tensor.ndim == 4 {
++          tensor = tensor.transposed(0, 2, 3, 1)
++        }
++
++        // Only attempt update if the parameter exists
++        let fullKey = "vae.\(name)"
++        if !paramKeySet.contains(fullKey) && !paramKeySet.contains(name) {
++          continue
++        }
++        // Reuse existing applier to update a single param
++        ZImageWeightsMapping.applyToModule(model, weights: [fullKey: tensor], prefix: "vae", logger: logger)
++      }
++    }
++  }
++
+   /// Load controlnet weights from a standalone safetensors file
+   public func loadControlnetWeights(from path: String, dtype: DType? = .bfloat16) throws -> [String: MLXArray] {
+     let url: URL
