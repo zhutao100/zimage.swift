@@ -129,7 +129,9 @@ private final class VAEResnetBlock2D: Module {
     hidden = silu(norm2(hidden))
     hidden = conv2(hidden)
     let residual = isConvShortcut ? convShortcut!(x) : x
-    return residual + hidden
+    let out = residual + hidden
+    MLX.eval(out)
+    return out
   }
 }
 
@@ -149,21 +151,15 @@ private final class VAEUpSampler: Module {
 
   func callAsFunction(_ x: MLXArray) -> MLXArray {
     let upscaled = VAEUpSampler.upSampleNearest(x)
-    return conv(upscaled)
+    let y = conv(upscaled)
+    MLX.eval(y)
+    return y
   }
 
   static func upSampleNearest(_ x: MLXArray, scale: Int = 2) -> MLXArray {
     precondition(x.ndim == 4)
-    let b = x.dim(0)
-    let h = x.dim(1)
-    let w = x.dim(2)
-    let c = x.dim(3)
-    var expanded = broadcast(
-      x[0..., 0..., .newAxis, 0..., .newAxis, 0...],
-      to: [b, h, scale, w, scale, c]
-    )
-    expanded = expanded.reshaped(b, h * scale, w * scale, c)
-    return expanded
+    // Use MLXNN.Upsample to avoid large broadcast+reshape intermediates
+    return MLXNN.Upsample(scaleFactor: .array([Float(scale), Float(scale)]), mode: .nearest)(x)
   }
 }
 
