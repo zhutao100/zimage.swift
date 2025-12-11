@@ -238,7 +238,8 @@ public struct ZImageControlPipeline {
 
     logger.info("Loading VAE...")
     let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
-    let vaeWeights = try weightsMapper.loadVAE()
+    // Load VAE weights as bfloat16 to keep decode compute in bf16
+    let vaeWeights = try weightsMapper.loadVAE(dtype: .bfloat16)
     ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
 
     var controlContext: MLXArray? = nil
@@ -350,7 +351,9 @@ public struct ZImageControlPipeline {
   }
 
   private func decodeLatents(_ latents: MLXArray, vae: AutoencoderKL, height: Int, width: Int) -> MLXArray {
-    let (decoded, _) = vae.decode(latents)
+    // Ensure VAE decode runs in bf16 by casting inputs; post-processing remains float32/uint8 downstream
+    let input = latents.asType(.bfloat16)
+    let (decoded, _) = vae.decode(input)
     var image = decoded
     if height != decoded.dim(2) || width != decoded.dim(3) {
       var nhwc = image.transposed(0, 2, 3, 1)

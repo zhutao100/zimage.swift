@@ -345,7 +345,8 @@ public struct ZImagePipeline {
     GPU.clearCache()
 
     let vae = try loadVAEDecoder(snapshot: snapshot, config: modelConfigs.vae)
-    let vaeWeights = try weightsMapper.loadVAE()
+    // Load VAE weights as bfloat16 to keep decode compute in bf16
+    let vaeWeights = try weightsMapper.loadVAE(dtype: .bfloat16)
     let decoderOnly = vaeWeights.filter { $0.key.hasPrefix("decoder.") }
     ZImageWeightsMapping.applyVAE(weights: decoderOnly, to: vae, manifest: quantManifest, logger: logger)
 
@@ -356,7 +357,9 @@ public struct ZImagePipeline {
   }
 
   private func decodeLatents(_ latents: MLXArray, vae: VAEImageDecoding, height: Int, width: Int) -> MLXArray {
-    let (decoded, _) = vae.decode(latents, return_dict: false)
+    // Ensure VAE decode runs in bf16 by casting inputs; post-processing remains float32/uint8 downstream
+    let input = latents.asType(.bfloat16)
+    let (decoded, _) = vae.decode(input, return_dict: false)
     var image = decoded
     if height != decoded.dim(2) || width != decoded.dim(3) {
       var nhwc = image.transposed(0, 2, 3, 1)

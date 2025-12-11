@@ -436,7 +436,10 @@ public final class AutoencoderKL: Module {
   public func decode(_ latents: MLXArray, return_dict: Bool = false) -> (MLXArray, Any) {
     var x = latents
     x = x.transposed(0, 2, 3, 1)
-    x = (x / MLXArray(configuration.scalingFactor)) + MLXArray(configuration.shiftFactor)
+    // Keep compute in the input dtype by casting scalars
+    let sf = MLXArray(configuration.scalingFactor).asType(x.dtype)
+    let sh = MLXArray(configuration.shiftFactor).asType(x.dtype)
+    x = (x / sf) + sh
     x = decoder(x)
     x = x.transposed(0, 3, 1, 2)
     return (x, [:] as [String: Int])
