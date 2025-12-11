@@ -61,7 +61,16 @@ public struct ZImageWeightsMapper {
 
   public func loadVAE(dtype: DType? = .bfloat16) throws -> [String: MLXArray] {
     if hasQuantization() {
-      return try loadQuantizedComponent("vae")
+      var tensors = try loadQuantizedComponent("vae")
+      if let targetDtype = dtype {
+        // Honor requested dtype even for quantized snapshots
+        for (k, v) in tensors {
+          if v.dtype != targetDtype {
+            tensors[k] = v.asType(targetDtype)
+          }
+        }
+      }
+      return tensors
     }
     return try loadStandardComponent(files: ZImageFiles.vaeWeights, dtype: dtype)
   }

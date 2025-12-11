@@ -35,7 +35,14 @@ public enum PipelineUtilities {
         height: Int,
         width: Int
     ) -> MLXArray {
-        let (decoded, _) = vae.decode(latents, return_dict: false)
+        let input: MLXArray
+        if latents.dtype == .bfloat16 {
+            input = latents
+        } else {
+            input = latents.asType(.bfloat16)
+        }
+
+        let (decoded, _) = vae.decode(input, return_dict: false)
         var image = decoded
         if height != decoded.dim(2) || width != decoded.dim(3) {
             var nhwc = image.transposed(0, 2, 3, 1)
