@@ -421,34 +421,44 @@ public struct ZImagePipeline {
     return nil
   }
 
-  private func canonicalizeTransformerOverride(_ weights: [String: MLXArray], dim: Int, logger: Logger) -> [String: MLXArray] {
+  // Canonicalize override checkpoints so their tensor keys match our transformer module names.
+  // Supports SD/ComfyUI-style exports that prefix keys with e.g. "model.diffusion_model.".
+  func canonicalizeTransformerOverride(_ weights: [String: MLXArray], dim: Int, logger: Logger) -> [String: MLXArray] {
     var out: [String: MLXArray] = [:]
     for (k, v) in weights {
+      // Strip common root prefixes from external checkpoints.
+      var key = k
+      for prefix in ["model.diffusion_model.", "diffusion_model.", "transformer.", "model."] {
+        if key.hasPrefix(prefix) {
+          key = String(key.dropFirst(prefix.count))
+        }
+      }
+
       // Map attention.out.weight -> attention.to_out.0.weight
-      if k.hasSuffix(".attention.out.weight") {
-        let newKey = k.replacingOccurrences(of: ".attention.out.weight", with: ".attention.to_out.0.weight")
+      if key.hasSuffix(".attention.out.weight") {
+        let newKey = key.replacingOccurrences(of: ".attention.out.weight", with: ".attention.to_out.0.weight")
         out[newKey] = v
         continue
       }
 
       // Split attention.qkv.weight -> to_q.weight, to_k.weight, to_v.weight
-      if k.hasSuffix(".attention.qkv.weight") {
+      if key.hasSuffix(".attention.qkv.weight") {
         if v.ndim == 2 && v.dim(0) == dim * 3 && v.dim(1) == dim {
           let q = v[0 ..< dim, 0...]
           let kW = v[dim ..< 2*dim, 0...]
           let vW = v[2*dim ..< 3*dim, 0...]
-          let base = k.replacingOccurrences(of: ".attention.qkv.weight", with: "")
+          let base = key.replacingOccurrences(of: ".attention.qkv.weight", with: "")
           out["\(base).attention.to_q.weight"] = q
           out["\(base).attention.to_k.weight"] = kW
           out["\(base).attention.to_v.weight"] = vW
         } else {
-          logger.warning("Unexpected qkv shape for \(k): \(v.shape) (expected [\(dim*3), \(dim)])")
+          logger.warning("Unexpected qkv shape for \(key): \(v.shape) (expected [\(dim*3), \(dim)])")
         }
         continue
       }
 
       // Passthrough other keys
-      var mapped = k
+      var mapped = key
       // Remap final_layer.* -> all_final_layer.2-1.* so our loader can pick them up
       if mapped.hasPrefix("final_layer.") {
         mapped = mapped.replacingOccurrences(of: "final_layer.", with: "all_final_layer.2-1.")
