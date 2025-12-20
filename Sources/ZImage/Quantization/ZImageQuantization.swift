@@ -518,4 +518,242 @@ public struct ZImageQuantizer {
 
     return safetensorFiles
   }
+  public static func quantizeControlnet(
+    from sourceURL: URL,
+    to outputURL: URL,
+    spec: ZImageQuantizationSpec,
+    specificFile: String? = nil,
+    verbose: Bool = false
+  ) throws {
+    guard supportedGroupSizes.contains(spec.groupSize) else {
+      throw ZImageQuantizationError.invalidGroupSize(spec.groupSize)
+    }
+    guard supportedBits.contains(spec.bits) else {
+      throw ZImageQuantizationError.invalidBits(spec.bits)
+    }
+
+    let fm = FileManager.default
+    let resolvedSourceURL = sourceURL.resolvingSymlinksInPath()
+    do {
+      try fm.createDirectory(at: outputURL, withIntermediateDirectories: true)
+    } catch {
+      throw ZImageQuantizationError.outputDirectoryCreationFailed(outputURL)
+    }
+    var safetensorFiles: [URL] = []
+    var isDirectory: ObjCBool = false
+
+    if fm.fileExists(atPath: resolvedSourceURL.path, isDirectory: &isDirectory) {
+      if isDirectory.boolValue {
+
+        if let specific = specificFile {
+
+          let specificURL = resolvedSourceURL.appendingPathComponent(specific)
+          if fm.fileExists(atPath: specificURL.path) {
+            safetensorFiles = [specificURL]
+            if verbose {
+              print("Using specific file: \(specific)")
+            }
+          } else {
+            throw ZImageQuantizationError.noSafetensorsFound(specificURL)
+          }
+        } else {
+
+          let contents = try fm.contentsOfDirectory(at: resolvedSourceURL, includingPropertiesForKeys: nil)
+          safetensorFiles = contents.filter { $0.pathExtension == "safetensors" }
+          if safetensorFiles.count > 1 && verbose {
+            print("WARNING: Found \(safetensorFiles.count) .safetensors files. Consider using --file to specify one.")
+            for file in safetensorFiles {
+              print("  - \(file.lastPathComponent)")
+            }
+          }
+        }
+      } else if resolvedSourceURL.pathExtension == "safetensors" {
+
+        safetensorFiles = [resolvedSourceURL]
+      }
+    }
+
+    guard !safetensorFiles.isEmpty else {
+      throw ZImageQuantizationError.noSafetensorsFound(resolvedSourceURL)
+    }
+
+    if verbose {
+      print("Quantizing \(safetensorFiles.count) safetensors file(s)")
+    }
+    var allWeights: [String: MLXArray] = [:]
+    for file in safetensorFiles {
+      let weights = try MLX.loadArrays(url: file)
+      for (key, value) in weights {
+        allWeights[key] = value
+      }
+    }
+
+    if verbose {
+      print("Loaded \(allWeights.count) tensors")
+    }
+    var quantizedWeights: [String: MLXArray] = [:]
+    var quantizedLayers: [ZImageQuantizationManifest.QuantizedLayerInfo] = []
+    var quantizedCount = 0
+    var skippedCount = 0
+
+    for (key, tensor) in allWeights {
+
+      let isEmbedding = key.contains("embed") || key.contains("embedding")
+      let isNorm = key.contains("norm") || key.contains("layernorm")
+      if key.hasSuffix(".weight") && tensor.ndim == 2 && !isEmbedding && !isNorm {
+        let outDim = tensor.dim(0)
+        let inDim = tensor.dim(1)
+        if inDim % spec.groupSize == 0 {
+          let base = String(key.dropLast(".weight".count))
+
+          var f = tensor
+          if f.dtype != .float32 {
+            f = f.asType(.float32)
+          }
+
+          let (wq, scales, biases) = MLX.quantized(
+            f,
+            groupSize: spec.groupSize,
+            bits: spec.bits,
+            mode: spec.mode.mlxMode
+          )
+
+          quantizedWeights[key] = wq
+          quantizedWeights["\(base).scales"] = scales
+          if let b = biases {
+            quantizedWeights["\(base).biases"] = b
+          }
+
+          quantizedLayers.append(.init(
+            name: base,
+            shape: [outDim, inDim],
+            inDim: inDim,
+            outDim: outDim,
+            file: "model.safetensors",
+            quantFile: "model.safetensors",
+            groupSize: spec.groupSize,
+            bits: spec.bits,
+            mode: spec.mode.rawValue
+          ))
+
+          quantizedCount += 1
+
+          if verbose {
+            print("  Quantized: \(key) [\(outDim)x\(inDim)]")
+          }
+        } else {
+
+          quantizedWeights[key] = tensor
+          skippedCount += 1
+          if verbose {
+            print("  Skipped (incompatible dims): \(key)")
+          }
+        }
+      } else {
+
+        quantizedWeights[key] = tensor
+        if !key.hasSuffix(".weight") {
+
+        } else {
+          skippedCount += 1
+          if verbose {
+            print("  Skipped: \(key)")
+          }
+        }
+      }
+    }
+
+    if verbose {
+      print("Quantized \(quantizedCount) layers, skipped \(skippedCount)")
+    }
+    let outputFile = outputURL.appendingPathComponent("model.safetensors")
+    try MLX.save(arrays: quantizedWeights, metadata: [:], url: outputFile)
+
+    if verbose {
+      print("Saved quantized weights to \(outputFile.path)")
+    }
+    let manifest = ZImageQuantizationManifest(
+      modelId: nil,
+      revision: nil,
+      groupSize: spec.groupSize,
+      bits: spec.bits,
+      mode: spec.mode.rawValue,
+      layers: quantizedLayers
+    )
+
+    let manifestURL = outputURL.appendingPathComponent("controlnet_quantization.json")
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let manifestData = try encoder.encode(manifest)
+    try manifestData.write(to: manifestURL)
+
+    if verbose {
+      print("Saved manifest to \(manifestURL.path)")
+      print("ControlNet quantization complete!")
+    }
+  }
+  public static func hasControlnetQuantization(at directory: URL) -> Bool {
+    let manifestURL = directory.appendingPathComponent("controlnet_quantization.json")
+    return FileManager.default.fileExists(atPath: manifestURL.path)
+  }
+  public static func loadControlnetManifest(from directory: URL) throws -> ZImageQuantizationManifest? {
+    let manifestURL = directory.appendingPathComponent("controlnet_quantization.json")
+    guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+      return nil
+    }
+    return try ZImageQuantizationManifest.load(from: manifestURL)
+  }
+  public static func controlnetTensorName(_ path: String) -> String {
+    var result = path
+
+    result = result.replacingOccurrences(of: "controlNoiseRefiner", with: "control_noise_refiner")
+    result = result.replacingOccurrences(of: "controlLayers", with: "control_layers")
+    result = result.replacingOccurrences(of: "controlAllXEmbedder", with: "control_all_x_embedder")
+    result = result.replacingOccurrences(of: "feedForward", with: "feed_forward")
+    result = result.replacingOccurrences(of: "toQ", with: "to_q")
+    result = result.replacingOccurrences(of: "toK", with: "to_k")
+    result = result.replacingOccurrences(of: "toV", with: "to_v")
+    result = result.replacingOccurrences(of: "toOut", with: "to_out")
+    result = result.replacingOccurrences(of: "beforeProj", with: "before_proj")
+    result = result.replacingOccurrences(of: "afterProj", with: "after_proj")
+    return result
+  }
+  public static func applyControlnetQuantization(
+    to transformer: ZImageControlTransformer2DModel,
+    manifest: ZImageQuantizationManifest,
+    availableKeys: Set<String>
+  ) {
+    let defaultSpec = (manifest.groupSize, manifest.bits, manifest.mode)
+    for (i, block) in transformer.controlNoiseRefiner.enumerated() {
+      let prefix = "control_noise_refiner.\(i)"
+      quantizeBlock(block, prefix: prefix, availableKeys: availableKeys,
+                    defaultSpec: defaultSpec, manifest: manifest, tensorNameTransform: controlnetTensorName)
+    }
+    for (i, block) in transformer.controlLayers.enumerated() {
+      let prefix = "control_layers.\(i)"
+      quantizeControlBlock(block, prefix: prefix, availableKeys: availableKeys,
+                           defaultSpec: defaultSpec, manifest: manifest)
+    }
+  }
+
+  private static func quantizeControlBlock(
+    _ block: ZImageControlTransformerBlock,
+    prefix: String,
+    availableKeys: Set<String>,
+    defaultSpec: (Int, Int, String),
+    manifest: ZImageQuantizationManifest
+  ) {
+    MLXNN.quantize(model: block) { path, _ in
+      let tensorName = controlnetTensorName("\(prefix).\(path)")
+      let scalesKey = "\(tensorName).scales"
+      guard availableKeys.contains(scalesKey) else { return nil }
+
+      let (groupSize, bits, modeStr) =
+        manifest.layers.first(where: { $0.name == tensorName }).map {
+          ($0.groupSize ?? defaultSpec.0, $0.bits ?? defaultSpec.1, $0.mode ?? defaultSpec.2)
+        } ?? defaultSpec
+      let mode: QuantizationMode = modeStr == "mxfp4" ? .mxfp4 : .affine
+      return (groupSize, bits, mode)
+    }
+  }
 }

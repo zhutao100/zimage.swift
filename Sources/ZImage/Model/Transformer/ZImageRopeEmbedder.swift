@@ -1,7 +1,7 @@
 import Foundation
 import MLX
 
-final class ZImageRopeEmbedder {
+public final class ZImageRopeEmbedder {
   let theta: Float
   let axesDims: [Int]
   let axesLens: [Int]

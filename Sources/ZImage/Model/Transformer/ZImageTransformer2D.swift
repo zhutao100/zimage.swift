@@ -2,33 +2,6 @@ import Foundation
 import MLX
 import MLXNN
 
-private struct TransformerCacheKey: Hashable {
-  let batch: Int
-  let height: Int
-  let width: Int
-  let frames: Int
-  let capOriLen: Int
-}
-
-private struct TransformerCache {
-  let capFreqs: MLXArray
-  let capPadMask: MLXArray?
-  let capSeqLen: Int
-  let capPad: Int
-
-  let imgFreqs: MLXArray
-  let imgPadMask: MLXArray?
-  let imgSeqLen: Int
-  let imgPad: Int
-  let imageTokens: Int
-
-  let unifiedFreqsCis: MLXArray
-
-  let fTokens: Int
-  let hTokens: Int
-  let wTokens: Int
-}
-
 public final class ZImageTransformer2DModel: Module {
   public let configuration: ZImageTransformerConfig
   @ModuleInfo(key: "t_embedder") var tEmbedder: ZImageTimestepEmbedder
@@ -192,7 +165,6 @@ public final class ZImageTransformer2DModel: Module {
     patchSize: Int,
     fPatchSize: Int
   ) -> TransformerCache {
-    let seqMultiOf = 32
     let key = TransformerCacheKey(
       batch: batch,
       height: height,
@@ -205,67 +177,15 @@ public final class ZImageTransformer2DModel: Module {
       return existingCache
     }
 
-    let capPad = (seqMultiOf - (capOriLen % seqMultiOf)) % seqMultiOf
-    let capSeqLen = capOriLen + capPad
-
-    let capPosIds = ZImageCoordinateUtils.createCoordinateGrid(
-      size: (capSeqLen, 1, 1),
-      start: (1, 0, 0)
-    ).reshaped(capSeqLen, 3)
-    let capFreqs = ropeEmbedder(ids: capPosIds)
-
-    var capPadMask: MLXArray? = nil
-    if capPad > 0 {
-      let capPadMask1d = MLX.concatenated([
-        MLX.zeros([capOriLen], dtype: .bool),
-        MLX.ones([capPad], dtype: .bool)
-      ], axis: 0)
-      capPadMask = MLX.broadcast(capPadMask1d.reshaped(1, capSeqLen), to: [batch, capSeqLen])
-    }
-
-    let fTokens = frames / fPatchSize
-    let hTokens = height / patchSize
-    let wTokens = width / patchSize
-    let imageTokens = fTokens * hTokens * wTokens
-    let imgPad = (seqMultiOf - (imageTokens % seqMultiOf)) % seqMultiOf
-    let imgSeqLen = imageTokens + imgPad
-
-    let imgPos = ZImageCoordinateUtils.createCoordinateGrid(
-      size: (fTokens, hTokens, wTokens),
-      start: (capSeqLen + 1, 0, 0)
-    ).reshaped(imageTokens, 3)
-    let imgPadPos = ZImageCoordinateUtils.createCoordinateGrid(
-      size: (imgPad, 1, 1),
-      start: (0, 0, 0)
-    ).reshaped(imgPad, 3)
-    let imgPosIds = MLX.concatenated([imgPos, imgPadPos], axis: 0)
-    let imgFreqs = ropeEmbedder(ids: imgPosIds)
-
-    var imgPadMask: MLXArray? = nil
-    if imgPad > 0 {
-      let imgPadMask1d = MLX.concatenated([
-        MLX.zeros([imageTokens], dtype: .bool),
-        MLX.ones([imgPad], dtype: .bool)
-      ], axis: 0)
-      imgPadMask = MLX.broadcast(imgPadMask1d.reshaped(1, imgSeqLen), to: [batch, imgSeqLen])
-    }
-
-    let unifiedFreqsCis = MLX.concatenated([imgFreqs, capFreqs], axis: 0)
-
-    let newCache = TransformerCache(
-      capFreqs: capFreqs,
-      capPadMask: capPadMask,
-      capSeqLen: capSeqLen,
-      capPad: capPad,
-      imgFreqs: imgFreqs,
-      imgPadMask: imgPadMask,
-      imgSeqLen: imgSeqLen,
-      imgPad: imgPad,
-      imageTokens: imageTokens,
-      unifiedFreqsCis: unifiedFreqsCis,
-      fTokens: fTokens,
-      hTokens: hTokens,
-      wTokens: wTokens
+    let newCache = TransformerCacheBuilder.build(
+      batch: batch,
+      height: height,
+      width: width,
+      frames: frames,
+      capOriLen: capOriLen,
+      patchSize: patchSize,
+      fPatchSize: fPatchSize,
+      ropeEmbedder: ropeEmbedder
     )
 
     self.cache = newCache

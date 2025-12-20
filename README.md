@@ -112,7 +112,8 @@ Generate images with ControlNet conditioning using Canny, HED, Depth, Pose, or M
 ZImageCLI control \
   --prompt "A hyper-realistic close-up portrait of a leopard" \
   --control-image canny_edges.jpg \
-  --controlnet-weights alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union \
+  --controlnet-weights alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.0 \
+  --control-file Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors \
   --control-scale 0.75 \
   --output leopard.png
 ```
@@ -142,7 +143,7 @@ ZImageCLI control \
 | Depth | A hyperrealistic architectural photograph of a spacious, minimalist modern hallway interior. Large floor-to-ceiling windows on the right wall fill the space with bright natural daylight. A light gray sectional sofa and a low, modern coffee table are placed in the foreground on a light wood floor. A large potted plant is visible further down the hallway. White walls, clean lines, serene atmosphere, highly detailed, 8k resolution, cinematic lighting | ![Depth](images/depth.jpg) | ![Depth Output](examples/depth.png) |
 | Pose | 一位年轻女子站在阳光明媚的海岸线上，白裙在轻拂的海风中微微飘动。她拥有一头鲜艳的紫色长发，在风中轻盈舞动... | ![Pose](images/pose.jpg) | ![Pose Output](examples/pose.png) |
 
-## Example Output
+## Example Text To Image Output
 
 | Prompt | Output |
 |--------|--------|

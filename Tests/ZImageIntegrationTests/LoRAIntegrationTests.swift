@@ -2,66 +2,41 @@ import XCTest
 import MLX
 @testable import ZImage
 
-/// Integration tests for LoRA functionality using real model inference.
-/// Run with: xcodebuild test -scheme zimage.swift -destination 'platform=macOS' -only-testing:ZImageIntegrationTests/LoRAIntegrationTests -parallel-testing-enabled NO
 final class LoRAIntegrationTests: XCTestCase {
-
-  /// Shared pipeline instance to avoid reloading model for each test
-  private static var sharedPipeline: ZImagePipeline?
-
-  /// Project root directory (derived from test file location)
-  private static let projectRoot: URL = {
-    URL(fileURLWithPath: #file)
-      .deletingLastPathComponent()  // Remove LoRAIntegrationTests.swift
-      .deletingLastPathComponent()  // Remove ZImageIntegrationTests
-      .deletingLastPathComponent()  // Remove Tests -> project root
-  }()
-
-  /// Output directory for test-generated images (inside project)
+  nonisolated(unsafe) private static var sharedPipeline: ZImagePipeline?
   private static let outputDir: URL = {
-    let url = projectRoot
-      .appendingPathComponent("Tests")
+    let url = FileManager.default.temporaryDirectory
       .appendingPathComponent("ZImageIntegrationTests")
-      .appendingPathComponent("Resources")
+      .appendingPathComponent("LoRAIntegrationTests")
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }()
-
-  /// Initialize shared pipeline once for all tests
   override class func setUp() {
     super.setUp()
-    // Skip pipeline creation in CI
+
     if ProcessInfo.processInfo.environment["CI"] == nil {
       sharedPipeline = ZImagePipeline()
     }
   }
 
   override class func tearDown() {
-    // Clean up shared pipeline
+
     sharedPipeline = nil
-    // Clean up Resources directory after all tests
+
     try? FileManager.default.removeItem(at: outputDir)
     super.tearDown()
   }
-
-  /// Get the shared pipeline or skip test if not available
   private func getPipeline() throws -> ZImagePipeline {
     guard let pipeline = Self.sharedPipeline else {
       throw XCTSkip("Pipeline not available (likely CI environment)")
     }
     return pipeline
   }
-
-  // Note: These tests require a LoRA model to be available.
-  // Default test LoRA: ostris/z_image_turbo_childrens_drawings
-
-  // MARK: - LoRA Style Application Tests
-
   func testLoRAStyleApplication() async throws {
     try skipIfNoGPU()
     let pipeline = try getPipeline()
 
-    let loraPath = getTestLoRAPath()
+    let loraConfig = getTestLoRAConfiguration()
     let tempOutput = Self.outputDir.appendingPathComponent("test_lora.png")
 
     let request = ZImageGenerationRequest(
@@ -71,8 +46,7 @@ final class LoRAIntegrationTests: XCTestCase {
       steps: 9,
       outputPath: tempOutput,
       model: "mzbac/z-image-turbo-8bit",
-      loraPath: loraPath,
-      loraScale: 1.0
+      lora: loraConfig
     )
 
     let outputURL = try await pipeline.generate(request)
@@ -83,10 +57,8 @@ final class LoRAIntegrationTests: XCTestCase {
     try skipIfNoGPU()
     let pipeline = try getPipeline()
 
-    let loraPath = getTestLoRAPath()
+    let loraConfig = getTestLoRAConfiguration()
     let seed: UInt64 = 123456
-
-    // Generate without LoRA
     let noLoraOutput = Self.outputDir.appendingPathComponent("test_no_lora.png")
 
     let requestNoLora = ZImageGenerationRequest(
@@ -99,8 +71,6 @@ final class LoRAIntegrationTests: XCTestCase {
       model: "mzbac/z-image-turbo-8bit"
     )
     _ = try await pipeline.generate(requestNoLora)
-
-    // Generate with LoRA
     let withLoraOutput = Self.outputDir.appendingPathComponent("test_with_lora.png")
 
     let requestWithLora = ZImageGenerationRequest(
@@ -111,22 +81,15 @@ final class LoRAIntegrationTests: XCTestCase {
       seed: seed,
       outputPath: withLoraOutput,
       model: "mzbac/z-image-turbo-8bit",
-      loraPath: loraPath,
-      loraScale: 1.0
+      lora: loraConfig
     )
     _ = try await pipeline.generate(requestWithLora)
-
-    // Both should exist
     XCTAssertTrue(FileManager.default.fileExists(atPath: noLoraOutput.path))
     XCTAssertTrue(FileManager.default.fileExists(atPath: withLoraOutput.path))
-
-    // Images should be different (LoRA should change the output)
     let dataNoLora = try Data(contentsOf: noLoraOutput)
     let dataWithLora = try Data(contentsOf: withLoraOutput)
     XCTAssertNotEqual(dataNoLora, dataWithLora, "LoRA should produce different output")
   }
-
-  // MARK: - Error Handling Tests
 
   func testInvalidLoRAPath() async throws {
     try skipIfNoGPU()
@@ -141,30 +104,48 @@ final class LoRAIntegrationTests: XCTestCase {
       steps: 9,
       outputPath: tempOutput,
       model: "mzbac/z-image-turbo-8bit",
-      loraPath: "/nonexistent/path/to/lora",
-      loraScale: 1.0
+      lora: .local("/nonexistent/path/to/lora")
     )
-
-    // Should throw an error for invalid LoRA path
     do {
       _ = try await pipeline.generate(request)
       XCTFail("Should have thrown an error for invalid LoRA path")
     } catch {
-      // Expected error
+
       XCTAssertTrue(true)
     }
   }
 
-  // MARK: - Helper Functions
+  func testLoRAConfigurationLocal() {
+    let config = LoRAConfiguration.local("/path/to/lora.safetensors")
+    XCTAssertEqual(config.scale, 1.0)
+    XCTAssertTrue(config.source.isLocal)
+  }
 
-  private func getTestLoRAPath() -> String {
-    // Check for environment variable first
+  func testLoRAConfigurationHuggingFace() {
+    let config = LoRAConfiguration.huggingFace("ostris/z_image_turbo_childrens_drawings")
+    XCTAssertEqual(config.scale, 1.0)
+    XCTAssertFalse(config.source.isLocal)
+  }
+
+  func testLoRAConfigurationWithScale() {
+    let config = LoRAConfiguration.local("/path/to/lora", scale: 0.5)
+    XCTAssertEqual(config.scale, 0.5)
+  }
+
+  func testLoRAConfigurationScaleClamped() {
+    let configLow = LoRAConfiguration.local("/path/to/lora", scale: -0.5)
+    XCTAssertEqual(configLow.scale, 0.0)
+
+    let configHigh = LoRAConfiguration.local("/path/to/lora", scale: 1.5)
+    XCTAssertEqual(configHigh.scale, 1.0)
+  }
+
+  private func getTestLoRAConfiguration() -> LoRAConfiguration {
+
     if let envPath = ProcessInfo.processInfo.environment["ZIMAGE_TEST_LORA_PATH"] {
-      return envPath
+      return .local(envPath)
     }
-
-    // Default to HuggingFace LoRA for testing (will be downloaded automatically)
-    return "ostris/z_image_turbo_childrens_drawings"
+    return .huggingFace("ostris/z_image_turbo_childrens_drawings")
   }
 
   private func skipIfNoGPU() throws {

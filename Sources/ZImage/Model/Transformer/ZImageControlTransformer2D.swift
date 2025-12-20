@@ -16,9 +16,10 @@ public struct ZImageControlTransformerConfig {
   public var tScale: Float = 1000.0
   public var axesDims: [Int] = [32, 48, 48]
   public var axesLens: [Int] = [1024, 512, 512]
-
-  public var controlLayersPlaces: [Int] = [0, 5, 10, 15, 20, 25]
-  public var controlInDim: Int = 16
+  public var controlLayersPlaces: [Int] = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28]
+  public var controlRefinerLayersPlaces: [Int] = [0, 1]
+  public var controlInDim: Int = 33
+  public var addControlNoiseRefiner: Bool = true
 
   public init() {}
 
@@ -36,8 +37,10 @@ public struct ZImageControlTransformerConfig {
     tScale: Float = 1000.0,
     axesDims: [Int] = [32, 48, 48],
     axesLens: [Int] = [1024, 512, 512],
-    controlLayersPlaces: [Int] = [0, 5, 10, 15, 20, 25],
-    controlInDim: Int = 16
+    controlLayersPlaces: [Int] = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28],
+    controlRefinerLayersPlaces: [Int] = [0, 1],
+    controlInDim: Int = 33,
+    addControlNoiseRefiner: Bool = true
   ) {
     self.inChannels = inChannels
     self.dim = dim
@@ -53,54 +56,31 @@ public struct ZImageControlTransformerConfig {
     self.axesDims = axesDims
     self.axesLens = axesLens
     self.controlLayersPlaces = controlLayersPlaces
+    self.controlRefinerLayersPlaces = controlRefinerLayersPlaces
     self.controlInDim = controlInDim
+    self.addControlNoiseRefiner = addControlNoiseRefiner
   }
 }
-
-private struct ControlTransformerCacheKey: Hashable {
-  let batch: Int
-  let height: Int
-  let width: Int
-  let frames: Int
-  let capOriLen: Int
-}
-
-private struct ControlTransformerCache {
-  let capFreqs: MLXArray
-  let capPadMask: MLXArray?
-  let capSeqLen: Int
-  let capPad: Int
-
-  let imgFreqs: MLXArray
-  let imgPadMask: MLXArray?
-  let imgSeqLen: Int
-  let imgPad: Int
-  let imageTokens: Int
-
-  let unifiedFreqsCis: MLXArray
-
-  let fTokens: Int
-  let hTokens: Int
-  let wTokens: Int
-}
-
 public final class ZImageControlTransformer2DModel: Module {
   public let configuration: ZImageControlTransformerConfig
 
   let controlLayersPlaces: [Int]
   let controlLayersMapping: [Int: Int]
+  let controlRefinerLayersPlaces: [Int]
+  let controlRefinerLayersMapping: [Int: Int]
   let controlInDim: Int
+  let addControlNoiseRefiner: Bool
 
   @ModuleInfo(key: "t_embedder") var tEmbedder: ZImageTimestepEmbedder
   @ModuleInfo(key: "all_x_embedder") var allXEmbedder: [String: Linear]
   @ModuleInfo(key: "all_final_layer") var allFinalLayer: [String: ZImageFinalLayer]
-  @ModuleInfo(key: "noise_refiner") public internal(set) var noiseRefiner: [ZImageTransformerBlock]
+  @ModuleInfo(key: "noise_refiner") public internal(set) var noiseRefiner: [BaseZImageTransformerBlock]
   @ModuleInfo(key: "context_refiner") public internal(set) var contextRefiner: [ZImageTransformerBlock]
 
   @ModuleInfo(key: "layers") public internal(set) var layers: [BaseZImageTransformerBlock]
 
   @ModuleInfo(key: "control_all_x_embedder") var controlAllXEmbedder: [String: Linear]
-  @ModuleInfo(key: "control_noise_refiner") public internal(set) var controlNoiseRefiner: [ZImageTransformerBlock]
+  @ModuleInfo(key: "control_noise_refiner") public internal(set) var controlNoiseRefiner: [ZImageControlTransformerBlock]
   @ModuleInfo(key: "control_layers") public internal(set) var controlLayers: [ZImageControlTransformerBlock]
 
   var capEmbedNorm: RMSNorm
@@ -110,20 +90,25 @@ public final class ZImageControlTransformer2DModel: Module {
   private var xPadToken: MLXArray?
   private var capPadToken: MLXArray?
 
-  private var cache: ControlTransformerCache?
-  private var cacheKey: ControlTransformerCacheKey?
+  private var cache: TransformerCache?
+  private var cacheKey: TransformerCacheKey?
 
   public init(configuration: ZImageControlTransformerConfig) {
     self.configuration = configuration
     self.controlLayersPlaces = configuration.controlLayersPlaces
+    self.controlRefinerLayersPlaces = configuration.controlRefinerLayersPlaces
     self.controlInDim = configuration.controlInDim
-
-    // Build control layers mapping: layer_index -> control_index
+    self.addControlNoiseRefiner = configuration.addControlNoiseRefiner
     var mapping: [Int: Int] = [:]
     for (idx, place) in configuration.controlLayersPlaces.enumerated() {
       mapping[place] = idx
     }
     self.controlLayersMapping = mapping
+    var refinerMapping: [Int: Int] = [:]
+    for (idx, place) in configuration.controlRefinerLayersPlaces.enumerated() {
+      refinerMapping[place] = idx
+    }
+    self.controlRefinerLayersMapping = refinerMapping
 
     let outSize = min(configuration.dim, 256)
     self._tEmbedder.wrappedValue = ZImageTimestepEmbedder(outSize: outSize, midSize: 1024)
@@ -150,34 +135,33 @@ public final class ZImageControlTransformer2DModel: Module {
 
     self.capEmbedNorm = RMSNorm(dimensions: configuration.capFeatDim, eps: configuration.normEps)
     self.capEmbedLinear = Linear(configuration.capFeatDim, configuration.dim, bias: true)
-
-    var noiseBlocks: [ZImageTransformerBlock] = []
+    var noiseBlocks: [BaseZImageTransformerBlock] = []
     for layerId in 0..<configuration.nRefinerLayers {
+      let blockId = configuration.addControlNoiseRefiner ? refinerMapping[layerId] : nil
       noiseBlocks.append(
-        ZImageTransformerBlock(
+        BaseZImageTransformerBlock(
           layerId: 1000 + layerId,
           dim: configuration.dim,
           nHeads: configuration.nHeads,
           nKvHeads: configuration.nKVHeads,
           normEps: configuration.normEps,
           qkNorm: configuration.qkNorm,
-          modulation: true
+          modulation: true,
+          blockId: blockId
         )
       )
     }
     self._noiseRefiner.wrappedValue = noiseBlocks
-
-    var controlNoiseBlocks: [ZImageTransformerBlock] = []
-    for layerId in 0..<configuration.nRefinerLayers {
+    var controlNoiseBlocks: [ZImageControlTransformerBlock] = []
+    for idx in 0..<configuration.controlRefinerLayersPlaces.count {
       controlNoiseBlocks.append(
-        ZImageTransformerBlock(
-          layerId: 1000 + layerId,
+        ZImageControlTransformerBlock(
+          blockId: idx,
           dim: configuration.dim,
           nHeads: configuration.nHeads,
           nKvHeads: configuration.nKVHeads,
           normEps: configuration.normEps,
-          qkNorm: configuration.qkNorm,
-          modulation: true
+          qkNorm: configuration.qkNorm
         )
       )
     }
@@ -319,9 +303,8 @@ public final class ZImageControlTransformer2DModel: Module {
     capOriLen: Int,
     patchSize: Int,
     fPatchSize: Int
-  ) -> ControlTransformerCache {
-    let seqMultiOf = 32
-    let key = ControlTransformerCacheKey(
+  ) -> TransformerCache {
+    let key = TransformerCacheKey(
       batch: batch,
       height: height,
       width: width,
@@ -333,67 +316,15 @@ public final class ZImageControlTransformer2DModel: Module {
       return existingCache
     }
 
-    let capPad = (seqMultiOf - (capOriLen % seqMultiOf)) % seqMultiOf
-    let capSeqLen = capOriLen + capPad
-
-    let capPosIds = ZImageCoordinateUtils.createCoordinateGrid(
-      size: (capSeqLen, 1, 1),
-      start: (1, 0, 0)
-    ).reshaped(capSeqLen, 3)
-    let capFreqs = ropeEmbedder(ids: capPosIds)
-
-    var capPadMask: MLXArray? = nil
-    if capPad > 0 {
-      let capPadMask1d = MLX.concatenated([
-        MLX.zeros([capOriLen], dtype: .bool),
-        MLX.ones([capPad], dtype: .bool)
-      ], axis: 0)
-      capPadMask = MLX.broadcast(capPadMask1d.reshaped(1, capSeqLen), to: [batch, capSeqLen])
-    }
-
-    let fTokens = frames / fPatchSize
-    let hTokens = height / patchSize
-    let wTokens = width / patchSize
-    let imageTokens = fTokens * hTokens * wTokens
-    let imgPad = (seqMultiOf - (imageTokens % seqMultiOf)) % seqMultiOf
-    let imgSeqLen = imageTokens + imgPad
-
-    let imgPos = ZImageCoordinateUtils.createCoordinateGrid(
-      size: (fTokens, hTokens, wTokens),
-      start: (capSeqLen + 1, 0, 0)
-    ).reshaped(imageTokens, 3)
-    let imgPadPos = ZImageCoordinateUtils.createCoordinateGrid(
-      size: (imgPad, 1, 1),
-      start: (0, 0, 0)
-    ).reshaped(imgPad, 3)
-    let imgPosIds = MLX.concatenated([imgPos, imgPadPos], axis: 0)
-    let imgFreqs = ropeEmbedder(ids: imgPosIds)
-
-    var imgPadMask: MLXArray? = nil
-    if imgPad > 0 {
-      let imgPadMask1d = MLX.concatenated([
-        MLX.zeros([imageTokens], dtype: .bool),
-        MLX.ones([imgPad], dtype: .bool)
-      ], axis: 0)
-      imgPadMask = MLX.broadcast(imgPadMask1d.reshaped(1, imgSeqLen), to: [batch, imgSeqLen])
-    }
-
-    let unifiedFreqsCis = MLX.concatenated([imgFreqs, capFreqs], axis: 0)
-
-    let newCache = ControlTransformerCache(
-      capFreqs: capFreqs,
-      capPadMask: capPadMask,
-      capSeqLen: capSeqLen,
-      capPad: capPad,
-      imgFreqs: imgFreqs,
-      imgPadMask: imgPadMask,
-      imgSeqLen: imgSeqLen,
-      imgPad: imgPad,
-      imageTokens: imageTokens,
-      unifiedFreqsCis: unifiedFreqsCis,
-      fTokens: fTokens,
-      hTokens: hTokens,
-      wTokens: wTokens
+    let newCache = TransformerCacheBuilder.build(
+      batch: batch,
+      height: height,
+      width: width,
+      frames: frames,
+      capOriLen: capOriLen,
+      patchSize: patchSize,
+      fPatchSize: fPatchSize,
+      ropeEmbedder: ropeEmbedder
     )
 
     self.cache = newCache
@@ -401,20 +332,13 @@ public final class ZImageControlTransformer2DModel: Module {
 
     return newCache
   }
-
-  private func forwardControl(
-    unified: MLXArray,
-    capFeats: MLXArray,
+  private func embedControlContext(
     controlContext: MLXArray,
-    imgFreqs: MLXArray,
-    capFreqs: MLXArray,
     tEmb: MLXArray,
-    cached: ControlTransformerCache
-  ) -> [MLXArray] {
-    let patchSize = 2
-    let fPatchSize = 1
+    patchSize: Int = 2,
+    fPatchSize: Int = 1
+  ) -> (MLXArray, Int) {
     let key = "\(patchSize)-\(fPatchSize)"
-
     guard let controlXEmbed = controlAllXEmbedder[key] else {
       fatalError("Control embedder not found for key: \(key)")
     }
@@ -434,8 +358,6 @@ public final class ZImageControlTransformer2DModel: Module {
       .reshaped(batch, channels, fTokens, fPatchSize, hTokens, patchSize, wTokens, patchSize)
       .transposed(0, 2, 4, 6, 3, 5, 7, 1)
       .reshaped(batch, controlTokens, patchSize * patchSize * fPatchSize * channels)
-
-    // Pad to sequence multiple
     let seqMultiOf = 32
     let controlPad = (seqMultiOf - (controlTokens % seqMultiOf)) % seqMultiOf
     if controlPad > 0 {
@@ -459,28 +381,57 @@ public final class ZImageControlTransformer2DModel: Module {
       controlEmbed = MLX.where(MLX.expandedDimensions(padMask, axis: 2), pad, controlEmbed)
     }
 
-    for block in controlNoiseRefiner {
-      controlEmbed = block(
-        controlEmbed,
+    return (controlEmbed, controlTokens)
+  }
+
+  private func forwardControlRefiner(
+    noiseStream: MLXArray,
+    controlEmbed: MLXArray,
+    imgFreqs: MLXArray,
+    tEmb: MLXArray
+  ) -> (refinerHints: [MLXArray], refinedControl: MLXArray) {
+    let adalnInput = tEmb.asType(controlEmbed.dtype)
+
+    var c = controlEmbed
+    for refinerBlock in controlNoiseRefiner {
+      c = refinerBlock(
+        c,
+        x: noiseStream,
         attnMask: nil,
-        freqsCis: cached.imgFreqs,
+        freqsCis: imgFreqs,
         adalnInput: adalnInput
       )
     }
 
-    let controlUnified = MLX.concatenated([controlEmbed, capFeats], axis: 1)
+    let numHints = c.dim(0) - 1
+    var hints: [MLXArray] = []
+    for i in 0..<numHints {
+      hints.append(c[i])
+    }
+    let refinedControl = c[numHints]
 
+    return (hints, refinedControl)
+  }
+
+  private func forwardControlLayers(
+    unified: MLXArray,
+    refinedControl: MLXArray,
+    capFeats: MLXArray,
+    unifiedFreqs: MLXArray,
+    tEmb: MLXArray
+  ) -> [MLXArray] {
+    let adalnInput = tEmb.asType(unified.dtype)
+    let controlUnified = MLX.concatenated([refinedControl, capFeats], axis: 1)
     var c = controlUnified
     for controlLayer in controlLayers {
       c = controlLayer(
         c,
         x: unified,
         attnMask: nil,
-        freqsCis: cached.unifiedFreqsCis,
+        freqsCis: unifiedFreqs,
         adalnInput: adalnInput
       )
     }
-
     let numHints = c.dim(0) - 1
     var hints: [MLXArray] = []
     for i in 0..<numHints {
@@ -563,17 +514,31 @@ public final class ZImageControlTransformer2DModel: Module {
       let pad = MLX.broadcast(xPadToken.reshaped(1, 1, padDim), to: [batch, cached.imgSeqLen, padDim])
       image = MLX.where(MLX.expandedDimensions(imgPadMask, axis: 2), pad, image)
     }
-
+    var refinerHints: [MLXArray]? = nil
+    var refinedControlContext: MLXArray? = nil
     var noiseStream = image
+    if let controlCtx = controlContext, addControlNoiseRefiner {
+
+      let (controlEmbed, _) = embedControlContext(controlContext: controlCtx, tEmb: tEmb)
+      let refinerResult = forwardControlRefiner(
+        noiseStream: noiseStream,
+        controlEmbed: controlEmbed,
+        imgFreqs: cached.imgFreqs,
+        tEmb: tEmb
+      )
+      refinerHints = refinerResult.refinerHints
+      refinedControlContext = refinerResult.refinedControl
+    }
     for block in noiseRefiner {
       noiseStream = block(
         noiseStream,
         attnMask: nil,
         freqsCis: cached.imgFreqs,
-        adalnInput: tEmb
+        adalnInput: tEmb,
+        hints: refinerHints,
+        contextScale: controlContextScale
       )
     }
-
     var capStream = capFeat
     for block in contextRefiner {
       capStream = block(
@@ -583,29 +548,25 @@ public final class ZImageControlTransformer2DModel: Module {
         adalnInput: nil
       )
     }
-
     var unified = MLX.concatenated([noiseStream, capStream], axis: 1)
+    var layerHints: [MLXArray]? = nil
+    if let refinedControl = refinedControlContext {
 
-    var hints: [MLXArray]? = nil
-    if let controlCtx = controlContext {
-      hints = forwardControl(
+      layerHints = forwardControlLayers(
         unified: unified,
+        refinedControl: refinedControl,
         capFeats: capStream,
-        controlContext: controlCtx,
-        imgFreqs: cached.imgFreqs,
-        capFreqs: cached.capFreqs,
-        tEmb: tEmb,
-        cached: cached
+        unifiedFreqs: cached.unifiedFreqsCis,
+        tEmb: tEmb
       )
     }
-
     for block in layers {
       unified = block(
         unified,
         attnMask: nil,
         freqsCis: cached.unifiedFreqsCis,
         adalnInput: tEmb,
-        hints: hints,
+        hints: layerHints,
         contextScale: controlContextScale
       )
     }

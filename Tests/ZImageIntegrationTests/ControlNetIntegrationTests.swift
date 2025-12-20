@@ -6,24 +6,14 @@ import MLX
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
-
-/// Integration tests for ControlNet pipeline using real model inference.
-/// These tests require downloading the ControlNet weights from alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union.
-/// Run with: xcodebuild test -scheme zimage.swift -destination 'platform=macOS' -only-testing:ZImageIntegrationTests/ControlNetIntegrationTests -parallel-testing-enabled NO
 final class ControlNetIntegrationTests: XCTestCase {
-
-  /// Shared pipeline instance to avoid reloading model for each test
   private static var sharedPipeline: ZImageControlPipeline?
-
-  /// Project root directory (derived from test file location)
   private static let projectRoot: URL = {
     URL(fileURLWithPath: #file)
-      .deletingLastPathComponent()  // Remove ControlNetIntegrationTests.swift
-      .deletingLastPathComponent()  // Remove ZImageIntegrationTests
-      .deletingLastPathComponent()  // Remove Tests -> project root
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
   }()
-
-  /// Output directory for test-generated images (inside project)
   private static let outputDir: URL = {
     let url = projectRoot
       .appendingPathComponent("Tests")
@@ -32,33 +22,27 @@ final class ControlNetIntegrationTests: XCTestCase {
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }()
-
-  /// Initialize shared pipeline once for all tests
   override class func setUp() {
     super.setUp()
-    // Skip pipeline creation in CI
+
     if ProcessInfo.processInfo.environment["CI"] == nil {
       sharedPipeline = ZImageControlPipeline()
     }
   }
 
   override class func tearDown() {
-    // Clean up shared pipeline
+
     sharedPipeline = nil
-    // Clean up Resources directory after all tests
+
     try? FileManager.default.removeItem(at: outputDir)
     super.tearDown()
   }
-
-  /// Get the shared pipeline or skip test if not available
   private func getPipeline() throws -> ZImageControlPipeline {
     guard let pipeline = Self.sharedPipeline else {
       throw XCTSkip("Pipeline not available (likely CI environment)")
     }
     return pipeline
   }
-
-  // MARK: - Control Generation Tests
 
   func testCannyControlGeneration() async throws {
     try skipIfNoGPU()
@@ -76,7 +60,8 @@ final class ControlNetIntegrationTests: XCTestCase {
       steps: 9,
       outputPath: tempOutput,
       model: "mzbac/z-image-turbo-8bit",
-      controlnetWeights: "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union"
+      controlnetWeights: "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.0",
+      controlnetWeightsFile: "Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors"
     )
 
     let outputURL = try await pipeline.generate(request)
@@ -99,7 +84,8 @@ final class ControlNetIntegrationTests: XCTestCase {
       steps: 9,
       outputPath: tempOutput,
       model: "mzbac/z-image-turbo-8bit",
-      controlnetWeights: "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union"
+      controlnetWeights: "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.0",
+      controlnetWeightsFile: "Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors"
     )
 
     let outputURL = try await pipeline.generate(request)
@@ -122,17 +108,60 @@ final class ControlNetIntegrationTests: XCTestCase {
       steps: 9,
       outputPath: tempOutput,
       model: "mzbac/z-image-turbo-8bit",
-      controlnetWeights: "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union"
+      controlnetWeights: "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.0",
+      controlnetWeightsFile: "Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors"
     )
 
     let outputURL = try await pipeline.generate(request)
     XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
   }
 
-  // MARK: - Helper Functions
+  func testControlNetV21PoseGeneration() async throws {
+    try skipIfNoGPU()
+    let pipeline = try getPipeline()
+
+    let poseImagePath = Self.projectRoot
+      .appendingPathComponent("temp")
+      .appendingPathComponent("Archive")
+      .appendingPathComponent("asset")
+      .appendingPathComponent("pose.jpg")
+    let controlImage: URL
+    if FileManager.default.fileExists(atPath: poseImagePath.path) {
+      controlImage = poseImagePath
+    } else {
+      controlImage = try createPoseImage()
+    }
+
+    let tempOutput = Self.outputDir.appendingPathComponent("test_controlnet_v21_pose.png")
+
+    let request = ZImageControlGenerationRequest(
+      prompt: "a young woman standing on a sunny coastline, photorealistic",
+      controlImage: controlImage,
+      controlContextScale: 0.75,
+      width: 576,
+      height: 1024,
+      steps: 25,
+      seed: 43,
+      outputPath: tempOutput,
+      model: "mzbac/z-image-turbo-8bit",
+      controlnetWeights: "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.0",
+      controlnetWeightsFile: "Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors"
+    )
+
+    let outputURL = try await pipeline.generate(request)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
+    guard let imageSource = CGImageSourceCreateWithURL(outputURL as CFURL, nil),
+          let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+      XCTFail("Failed to load output image")
+      return
+    }
+
+    XCTAssertEqual(cgImage.width, 576, "Output width should match request")
+    XCTAssertEqual(cgImage.height, 1024, "Output height should match request")
+  }
 
   private func createCannyEdgeImage() throws -> URL {
-    // Create image with white edges on black background
+
     let width = 512
     let height = 512
 
@@ -150,17 +179,11 @@ final class ControlNetIntegrationTests: XCTestCase {
     ) else {
       throw TestError.contextCreationFailed
     }
-
-    // Black background
     context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
     context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-
-    // White edges (simple rectangle)
     context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
     context.setLineWidth(3)
     context.stroke(CGRect(x: 100, y: 100, width: 312, height: 312))
-
-    // Diagonal line
     context.move(to: CGPoint(x: 100, y: 100))
     context.addLine(to: CGPoint(x: 412, y: 412))
     context.strokePath()
@@ -173,7 +196,7 @@ final class ControlNetIntegrationTests: XCTestCase {
   }
 
   private func createDepthMapImage() throws -> URL {
-    // Create grayscale gradient (near = white, far = black)
+
     let width = 512
     let height = 512
 
@@ -191,8 +214,6 @@ final class ControlNetIntegrationTests: XCTestCase {
     ) else {
       throw TestError.contextCreationFailed
     }
-
-    // Vertical gradient for depth
     for y in 0..<height {
       let depth = CGFloat(y) / CGFloat(height)
       context.setFillColor(CGColor(red: depth, green: depth, blue: depth, alpha: 1))
@@ -207,7 +228,7 @@ final class ControlNetIntegrationTests: XCTestCase {
   }
 
   private func createPoseImage() throws -> URL {
-    // Create simple stick figure pose
+
     let width = 512
     let height = 512
 
@@ -225,34 +246,20 @@ final class ControlNetIntegrationTests: XCTestCase {
     ) else {
       throw TestError.contextCreationFailed
     }
-
-    // Black background
     context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
     context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-
-    // Draw simple stick figure with colored joints
     let centerX = CGFloat(width / 2)
     let headY = CGFloat(100)
-
-    // Head (red)
     context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
     context.fillEllipse(in: CGRect(x: centerX - 20, y: headY - 20, width: 40, height: 40))
-
-    // Body line (white)
     context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
     context.setLineWidth(3)
-
-    // Spine
     context.move(to: CGPoint(x: centerX, y: headY + 20))
     context.addLine(to: CGPoint(x: centerX, y: headY + 150))
     context.strokePath()
-
-    // Arms
     context.move(to: CGPoint(x: centerX - 80, y: headY + 60))
     context.addLine(to: CGPoint(x: centerX + 80, y: headY + 60))
     context.strokePath()
-
-    // Legs
     context.move(to: CGPoint(x: centerX, y: headY + 150))
     context.addLine(to: CGPoint(x: centerX - 50, y: headY + 280))
     context.strokePath()

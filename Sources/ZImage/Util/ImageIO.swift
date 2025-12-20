@@ -17,7 +17,8 @@ public enum QwenImageIO {
   static func resizedCGImage(
     from image: CGImage,
     width: Int,
-    height: Int
+    height: Int,
+    interpolation: CGInterpolationQuality = .high
   ) throws -> CGImage {
     guard width > 0 && height > 0 else {
       throw QwenImageIOError.resizeFailed
@@ -38,7 +39,7 @@ public enum QwenImageIO {
       throw QwenImageIOError.resizeFailed
     }
 
-    context.interpolationQuality = .high
+    context.interpolationQuality = interpolation
     let rect = CGRect(x: 0, y: 0, width: width, height: height)
     context.draw(image, in: rect)
 
@@ -134,9 +135,9 @@ public enum QwenImageIO {
       let srcPointer = pointer.bindMemory(to: UInt8.self)
       for pixel in 0..<pixelCount {
         let dstIndex = pixel * 4
-        bytes[dstIndex] = srcPointer[pixel]                    
-        bytes[dstIndex + 1] = srcPointer[pixel + pixelCount]   
-        bytes[dstIndex + 2] = srcPointer[pixel + pixelCount * 2] 
+        bytes[dstIndex] = srcPointer[pixel]
+        bytes[dstIndex + 1] = srcPointer[pixel + pixelCount]
+        bytes[dstIndex + 2] = srcPointer[pixel + pixelCount * 2]
       }
     }
 
@@ -184,22 +185,37 @@ public enum QwenImageIO {
       throw QwenImageIOError.writeFailed
     }
   }
+  public static func imageData(from array: MLXArray) throws -> Data {
+    let cg = try image(from: array)
+    let mutableData = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(
+      mutableData as CFMutableData,
+      UTType.png.identifier as CFString,
+      1,
+      nil
+    ) else {
+      throw QwenImageIOError.writeFailed
+    }
+    CGImageDestinationAddImage(destination, cg, nil)
+    guard CGImageDestinationFinalize(destination) else {
+      throw QwenImageIOError.writeFailed
+    }
+    return mutableData as Data
+  }
 
   public static func resizedPixelArray(
     from image: CGImage,
     width: Int,
     height: Int,
     addBatchDimension: Bool = true,
-    dtype: DType = .float32
+    dtype: DType = .float32,
+    interpolation: CGInterpolationQuality = .high
   ) throws -> MLXArray {
     guard width > 0, height > 0 else {
       throw QwenImageIOError.resizeFailed
     }
 
-    // Use CoreGraphics high-quality resize (similar to PIL LANCZOS)
-    let resizedImage = try resizedCGImage(from: image, width: width, height: height)
-
-    // Convert resized image to array
+    let resizedImage = try resizedCGImage(from: image, width: width, height: height, interpolation: interpolation)
     let arr = try array(from: resizedImage, addBatchDimension: addBatchDimension, dtype: dtype)
     return arr
   }
@@ -320,8 +336,6 @@ public enum QwenImageIO {
     var horizontal = [UInt8](repeating: 0, count: srcHeight * dstRowStride)
     var outputBytes = [UInt8](repeating: 0, count: dstHeight * dstRowStride)
     let roundingOffset = Int64(1 << (precisionBits - 1))
-
-    // Horizontal pass
     for sy in 0..<srcHeight {
       let srcRowOffset = sy * srcRowStride
       let dstRowOffset = sy * dstRowStride
@@ -347,8 +361,6 @@ public enum QwenImageIO {
         horizontal[dstIndex + 3] = clipToUInt8(sumB, precisionBits: precisionBits)
       }
     }
-
-    // Vertical pass
     for dx in 0..<dstWidth {
       for dy in 0..<dstHeight {
         let coeff = verticalFixed[dy]

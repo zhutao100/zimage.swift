@@ -3,154 +3,120 @@ import XCTest
 
 final class LoRALoaderTests: XCTestCase {
 
-  // MARK: - Key Remapping Tests
-
   func testLoRAUnetPrefixRemoval() {
-    let input = "lora_unet_transformer_blocks.0.attn.qkv.lora_A.weight"
-    let expected = "transformer_blocks.0.attn.qkv.lora_A.weight"
+    let input = "lora_unet_transformer_blocks.0.attn.to_q"
+    let expected = "layers.0.attention.to_q.weight"
 
-    let result = LoRALoader.remapWeightKey(input)
+    let result = LoRAKeyMapper.mapToZImageKey(input)
     XCTAssertEqual(result, expected)
   }
 
   func testDiffusionModelPrefixRemoval() {
-    let input = "diffusion_model.layers.0.attn.q_proj.weight"
-    let expected = "layers.0.attn.q_proj.weight"
+    let input = "diffusion_model.layers.0.attention.to_q"
+    let expected = "layers.0.attention.to_q.weight"
 
-    let result = LoRALoader.remapWeightKey(input)
-    XCTAssertEqual(result, expected)
-  }
-
-  func testBothPrefixesRemoval() {
-    // If both prefixes are present (rare but possible)
-    let input = "lora_unet_diffusion_model.layers.0.weight"
-    let intermediate = "diffusion_model.layers.0.weight" // after lora_unet_ removal
-    let expected = "layers.0.weight" // after diffusion_model. removal
-
-    let result = LoRALoader.remapWeightKey(input)
+    let result = LoRAKeyMapper.mapToZImageKey(input)
     XCTAssertEqual(result, expected)
   }
 
   func testNoPrefixUnchanged() {
-    let input = "layers.0.attn.q_proj.weight"
-    let expected = "layers.0.attn.q_proj.weight"
+    let input = "layers.0.attention.to_q.weight"
+    let expected = "layers.0.attention.to_q.weight"
 
-    let result = LoRALoader.remapWeightKey(input)
+    let result = LoRAKeyMapper.mapToZImageKey(input)
     XCTAssertEqual(result, expected)
   }
 
-  // MARK: - Feed-Forward Layer Mapping Tests
-
   func testFFLayerMapping_Net0() {
-    // Flux format: transformer_blocks.{i}.ff.net.{0/2}.proj.weight
-    // Should map to: transformer_blocks.{i}.ff.linear1/linear2.weight
-    let input = "transformer_blocks.5.ff.net.0.proj.lora_A.weight"
-    let expected = "transformer_blocks.5.ff.linear1.weight"
+    let input = "transformer_blocks.5.ff.net.0.proj"
+    let expected = "layers.5.feed_forward.w1.weight"
 
-    let result = LoRALoader.remapWeightKey(input)
+    let result = LoRAKeyMapper.mapToZImageKey(input)
     XCTAssertEqual(result, expected)
   }
 
   func testFFLayerMapping_Net2() {
-    let input = "transformer_blocks.5.ff.net.2.proj.lora_B.weight"
-    let expected = "transformer_blocks.5.ff.linear2.weight"
+    let input = "transformer_blocks.5.ff.net.2"
+    let expected = "layers.5.feed_forward.w2.weight"
 
-    let result = LoRALoader.remapWeightKey(input)
+    let result = LoRAKeyMapper.mapToZImageKey(input)
     XCTAssertEqual(result, expected)
   }
 
-  func testFFContextLayerMapping() {
-    let input = "transformer_blocks.10.ff_context.net.0.proj.lora_A.weight"
-    let expected = "transformer_blocks.10.ff_context.linear1.weight"
-
-    let result = LoRALoader.remapWeightKey(input)
-    XCTAssertEqual(result, expected)
-  }
-
-  // MARK: - LoRA Key Pattern Tests
-
-  func testLoRAKeyPatterns() {
-    // Common LoRA key patterns that should be preserved
-    let patterns = [
-      "layers.0.attn.q_proj.lora_A.weight",
-      "layers.0.attn.q_proj.lora_B.weight",
-      "layers.0.attn.k_proj.lora_down.weight",
-      "layers.0.attn.k_proj.lora_up.weight",
-      "noise_refiner.0.attn.qkv.lora_A.weight"
+  func testAttentionKeyMapping() {
+    let testCases = [
+      ("transformer_blocks.0.attn.to_q", "layers.0.attention.to_q.weight"),
+      ("transformer_blocks.0.attn.to_k", "layers.0.attention.to_k.weight"),
+      ("transformer_blocks.0.attn.to_v", "layers.0.attention.to_v.weight"),
+      ("transformer_blocks.0.attn.to_out.0", "layers.0.attention.to_out.0.weight"),
     ]
 
-    for pattern in patterns {
-      let result = LoRALoader.remapWeightKey(pattern)
-      // Should remain unchanged (no prefix to remove)
-      XCTAssertEqual(result, pattern)
+    for (input, expected) in testCases {
+      let result = LoRAKeyMapper.mapToZImageKey(input)
+      XCTAssertEqual(result, expected, "Failed for input: \(input)")
     }
   }
 
   func testLoRAKeyWithLoraunnetPrefix() {
     let testCases = [
-      ("lora_unet_layers.0.attn.q_proj.lora_A.weight", "layers.0.attn.q_proj.lora_A.weight"),
-      ("lora_unet_layers.5.ff.linear1.lora_B.weight", "layers.5.ff.linear1.lora_B.weight"),
-      ("lora_unet_noise_refiner.0.attn.qkv.lora_down.weight", "noise_refiner.0.attn.qkv.lora_down.weight")
+      ("lora_unet_transformer_blocks.0.attn.to_q", "layers.0.attention.to_q.weight"),
+      ("lora_unet_transformer_blocks.5.ff.net.0.proj", "layers.5.feed_forward.w1.weight"),
     ]
 
     for (input, expected) in testCases {
-      let result = LoRALoader.remapWeightKey(input)
+      let result = LoRAKeyMapper.mapToZImageKey(input)
       XCTAssertEqual(result, expected, "Failed for input: \(input)")
     }
   }
 
-  // MARK: - Error Cases
+  func testNoiseRefinerKeys() {
+    let input = "noise_refiner.0.attn.to_q"
+    let expected = "noise_refiner.0.attention.to_q.weight"
 
-  func testEmptyString() {
-    let result = LoRALoader.remapWeightKey("")
-    XCTAssertEqual(result, "")
-  }
-
-  func testOnlyPrefix() {
-    let result = LoRALoader.remapWeightKey("lora_unet_")
-    XCTAssertEqual(result, "")
-  }
-
-  func testDiffusionModelOnly() {
-    let result = LoRALoader.remapWeightKey("diffusion_model.")
-    XCTAssertEqual(result, "")
-  }
-
-  // MARK: - Complex Key Patterns
-
-  func testComplexKeyWithMultipleDots() {
-    let input = "lora_unet_transformer_blocks.15.attn.heads.0.q_proj.lora_A.weight"
-    let expected = "transformer_blocks.15.attn.heads.0.q_proj.lora_A.weight"
-
-    let result = LoRALoader.remapWeightKey(input)
+    let result = LoRAKeyMapper.mapToZImageKey(input)
     XCTAssertEqual(result, expected)
   }
 
-  func testKeyWithNumbers() {
-    let input = "diffusion_model.layers.25.ff.linear2.lora_B.weight"
-    let expected = "layers.25.ff.linear2.lora_B.weight"
-
-    let result = LoRALoader.remapWeightKey(input)
-    XCTAssertEqual(result, expected)
+  func testValidTargetPaths() {
+    XCTAssertTrue(LoRAKeyMapper.isValidTarget("layers.0.attention.to_q.weight"))
+    XCTAssertTrue(LoRAKeyMapper.isValidTarget("layers.0.feed_forward.w1.weight"))
+    XCTAssertTrue(LoRAKeyMapper.isValidTarget("noise_refiner.0.attention.to_q.weight"))
+    XCTAssertTrue(LoRAKeyMapper.isValidTarget("context_refiner.0.attention.to_k.weight"))
   }
 
-  // MARK: - LoRA Error Tests
+  func testInvalidTargetPaths() {
+    XCTAssertFalse(LoRAKeyMapper.isValidTarget("invalid.path.weight"))
+    XCTAssertFalse(LoRAKeyMapper.isValidTarget("layers.99.attention.to_q.weight"))
+  }
 
-  func testLoRAErrorDirectoryNotFound() {
-    let error = LoRAError.directoryNotFound("/nonexistent/path")
+  func testLoRAErrorFileNotFound() {
+    let error = LoRAError.fileNotFound("/nonexistent/path")
     XCTAssertNotNil(error.errorDescription)
     XCTAssertTrue(error.errorDescription!.contains("/nonexistent/path"))
   }
 
-  func testLoRAErrorWeightsNotFound() {
-    let error = LoRAError.weightsNotFound("/some/path")
+  func testLoRAErrorInvalidFormat() {
+    let error = LoRAError.invalidFormat("missing keys")
+    XCTAssertNotNil(error.errorDescription)
+    XCTAssertTrue(error.errorDescription!.contains("missing keys"))
+  }
+
+  func testLoRAErrorIncompatibleWeights() {
+    let error = LoRAError.incompatibleWeights("Shape mismatch")
+    XCTAssertNotNil(error.errorDescription)
+    XCTAssertTrue(error.errorDescription!.contains("Shape mismatch"))
+  }
+
+  func testLoRAErrorNoSafetensorsFound() {
+    let url = URL(fileURLWithPath: "/some/path")
+    let error = LoRAError.noSafetensorsFound(url)
     XCTAssertNotNil(error.errorDescription)
     XCTAssertTrue(error.errorDescription!.contains("/some/path"))
   }
 
-  func testLoRAErrorApplicationFailed() {
-    let error = LoRAError.applicationFailed("Shape mismatch")
-    XCTAssertNotNil(error.errorDescription)
-    XCTAssertTrue(error.errorDescription!.contains("Shape mismatch"))
+  func testSupportedTargetPathsCount() {
+
+    let paths = LoRAKeyMapper.supportedTargetPaths
+    XCTAssertEqual(paths.count, 238)
   }
 }

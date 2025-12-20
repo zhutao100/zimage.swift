@@ -7,7 +7,7 @@ import Tokenizers
 import Hub
 import Dispatch
 
-public struct ZImageGenerationRequest {
+public struct ZImageGenerationRequest: Sendable {
   public var prompt: String
   public var negativePrompt: String?
   public var width: Int
@@ -18,9 +18,11 @@ public struct ZImageGenerationRequest {
   public var outputPath: URL
   public var model: String?
   public var maxSequenceLength: Int
-  public var loraPath: String?
-  public var loraScale: Float
+
+  public var lora: LoRAConfiguration?
+
   public var enhancePrompt: Bool
+
   public var enhanceMaxTokens: Int
 
   public init(
@@ -34,8 +36,7 @@ public struct ZImageGenerationRequest {
     outputPath: URL = URL(fileURLWithPath: "z-image.png"),
     model: String? = nil,
     maxSequenceLength: Int = 512,
-    loraPath: String? = nil,
-    loraScale: Float = 1.0,
+    lora: LoRAConfiguration? = nil,
     enhancePrompt: Bool = false,
     enhanceMaxTokens: Int = 512
   ) {
@@ -49,21 +50,23 @@ public struct ZImageGenerationRequest {
     self.outputPath = outputPath
     self.model = model
     self.maxSequenceLength = maxSequenceLength
-    self.loraPath = loraPath
-    self.loraScale = loraScale
+    self.lora = lora
     self.enhancePrompt = enhancePrompt
     self.enhanceMaxTokens = enhanceMaxTokens
   }
 }
 
-public struct ZImagePipeline {
-  public enum PipelineError: Error {
+public final class ZImagePipeline {
+  public enum PipelineError: Error, Sendable {
     case notImplemented
     case tokenizerNotLoaded
+    case invalidDimensions(String)
     case textEncoderNotLoaded
     case transformerNotLoaded
     case vaeNotLoaded
     case weightsMissing(String)
+    case modelNotLoaded
+    case loraError(LoRAError)
   }
 
   private var logger: Logger
@@ -72,10 +75,75 @@ public struct ZImagePipeline {
   private var textEncoder: QwenTextEncoder?
   private var transformer: ZImageTransformer2DModel?
   private var vae: AutoencoderKL?
+  private var modelConfigs: ZImageModelConfigs?
+  private var quantManifest: ZImageQuantizationManifest?
+  private var isModelLoaded: Bool = false
+  private var loadedModelId: String?
+  private var currentLoRA: LoRAWeights?
+  private var currentLoRAConfig: LoRAConfiguration?
+  private var modelSnapshot: URL?
+  private var useDynamicLoRA: Bool = false
 
   public init(logger: Logger = Logger(label: "z-image.pipeline"), hubApi: HubApi = .shared) {
     self.logger = logger
     self.hubApi = hubApi
+  }
+  public var isLoaded: Bool {
+    return isModelLoaded
+  }
+  public func unloadModel() {
+    tokenizer = nil
+    textEncoder = nil
+    transformer = nil
+    vae = nil
+    modelConfigs = nil
+    quantManifest = nil
+    isModelLoaded = false
+    loadedModelId = nil
+
+    currentLoRA = nil
+    currentLoRAConfig = nil
+    modelSnapshot = nil
+    useDynamicLoRA = false
+    GPU.clearCache()
+    logger.info("Model unloaded from memory")
+  }
+
+  public func unloadLoRA() {
+    guard currentLoRA != nil else { return }
+
+    if let trans = transformer {
+
+      LoRAApplicator.clearDynamicLoRA(from: trans, logger: logger)
+    }
+    currentLoRA = nil
+    currentLoRAConfig = nil
+    useDynamicLoRA = false
+    GPU.clearCache()
+    logger.info("LoRA unloaded (instant)")
+  }
+  public func unloadTransformer() {
+    transformer = nil
+
+    currentLoRA = nil
+    currentLoRAConfig = nil
+    useDynamicLoRA = false
+
+    GPU.clearCache()
+    logger.info("Transformer unloaded for memory optimization")
+  }
+
+  private func getAvailableMemory() -> UInt64 {
+    var stats = vm_statistics64()
+    var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
+    let result = withUnsafeMutablePointer(to: &stats) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+        host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+      }
+    }
+    guard result == KERN_SUCCESS else { return 0 }
+    let pageSize = UInt64(sysconf(_SC_PAGESIZE))
+    return UInt64(stats.free_count) * pageSize
   }
 
   private func loadTokenizer(snapshot: URL) throws -> QwenTokenizer {
@@ -120,39 +188,205 @@ public struct ZImagePipeline {
   }
 
   private func encodePrompt(_ prompt: String, tokenizer: QwenTokenizer, textEncoder: QwenTextEncoder, maxLength: Int) throws -> (MLXArray, MLXArray) {
-    let encoded = try tokenizer.encodeChat(prompts: [prompt], maxLength: maxLength)
-    let embeddingsList = textEncoder.encodeForZImage(inputIds: encoded.inputIds, attentionMask: encoded.attentionMask)
-
-    guard let firstEmbeds = embeddingsList.first else {
+    do {
+      let result = try PipelineUtilities.encodePrompt(prompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: maxLength)
+      return (result.embeddings, result.mask)
+    } catch {
       throw PipelineError.textEncoderNotLoaded
     }
-
-    let embedsBatch = firstEmbeds.expandedDimensions(axis: 0)
-    let mask = MLX.ones([1, firstEmbeds.dim(0)], dtype: .int32)
-
-    return (embedsBatch, mask)
   }
+  public struct GenerationProgress: Sendable {
+    public let stage: Stage
+    public let stepIndex: Int
+    public let totalSteps: Int
 
-  public func generate(_ request: ZImageGenerationRequest) async throws -> URL {
-    logger.info("Requested Z-Image generation")
-
-    let snapshot = try await prepareSnapshot(model: request.model)
-    let modelConfigs = try ZImageModelConfigs.load(from: snapshot)
-    let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
-    let quantManifest = weightsMapper.loadQuantizationManifest()
-
-    if let manifest = quantManifest {
-      logger.info("Loading quantized model (bits=\(manifest.bits), group_size=\(manifest.groupSize))")
+    public enum Stage: String, Sendable {
+      case loadingModel = "Loading model"
+      case encodingText = "Encoding text"
+      case loadingTransformer = "Loading transformer"
+      case loadingLoRA = "Loading LoRA"
+      case denoising = "Denoising"
+      case loadingVAE = "Loading VAE"
+      case decoding = "Decoding"
+      case saving = "Saving"
     }
 
-    let doCFG = request.guidanceScale > 1.0
+    public var fractionCompleted: Double {
+      guard totalSteps > 0 else { return 0 }
+      return Double(stepIndex) / Double(totalSteps)
+    }
 
+    public var percentComplete: Int {
+      Int(fractionCompleted * 100)
+    }
+  }
+
+  public typealias ProgressHandler = (GenerationProgress) -> Void
+  public func loadModel(modelSpec: String? = nil, progressHandler: ProgressHandler? = nil) async throws {
+    let modelId = modelSpec ?? ZImageRepository.id
+    if isModelLoaded && loadedModelId == modelId {
+      logger.info("Model already loaded, skipping load")
+      return
+    }
+    let canPreserveSharedComponents = isModelLoaded
+      && loadedModelId != modelId
+      && areZImageVariants(loadedModelId ?? "", modelId)
+    if isModelLoaded && loadedModelId != modelId {
+      if canPreserveSharedComponents {
+        logger.info("Switching Z-Image variant, preserving VAE and tokenizer")
+
+        textEncoder = nil
+        transformer = nil
+
+        currentLoRA = nil
+        currentLoRAConfig = nil
+        useDynamicLoRA = false
+      } else {
+        logger.info("Different model requested, unloading current model")
+        unloadModel()
+      }
+    }
+
+    logger.info("Loading model: \(modelId)")
+    progressHandler?(GenerationProgress(stage: .loadingModel, stepIndex: 0, totalSteps: 1))
+
+    let snapshot = try await PipelineSnapshot.prepare(model: modelSpec, logger: logger)
+    let configs = try ZImageModelConfigs.load(from: snapshot)
+    let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
+    let manifest = weightsMapper.loadQuantizationManifest()
+
+    if let m = manifest {
+      logger.info("Loading quantized model (bits=\(m.bits), group_size=\(m.groupSize))")
+    }
+    if tokenizer == nil {
+      progressHandler?(GenerationProgress(stage: .encodingText, stepIndex: 0, totalSteps: 1))
+      logger.info("Loading tokenizer...")
+      tokenizer = try loadTokenizer(snapshot: snapshot)
+    } else {
+      logger.info("Reusing cached tokenizer")
+    }
     logger.info("Loading text encoder...")
-    let tokenizer = try loadTokenizer(snapshot: snapshot)
-    let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
+    let te = try loadTextEncoder(snapshot: snapshot, config: configs.textEncoder)
     let textEncoderWeights = try weightsMapper.loadTextEncoder()
-    ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
+    ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: te, manifest: manifest, logger: logger)
+    textEncoder = te
+    progressHandler?(GenerationProgress(stage: .loadingTransformer, stepIndex: 0, totalSteps: 1))
+    logger.info("Loading transformer...")
+    let trans = try loadTransformer(snapshot: snapshot, config: configs.transformer)
+    let transformerWeights = try weightsMapper.loadTransformer()
+    ZImageWeightsMapping.applyTransformer(weights: transformerWeights, to: trans, manifest: manifest, logger: logger)
+    transformer = trans
+    if vae == nil {
+      progressHandler?(GenerationProgress(stage: .loadingVAE, stepIndex: 0, totalSteps: 1))
+      logger.info("Loading VAE...")
+      let v = try loadVAE(snapshot: snapshot, config: configs.vae)
+      let vaeWeights = try weightsMapper.loadVAE()
+      ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: v, manifest: manifest, logger: logger)
+      vae = v
+    } else {
+      logger.info("Reusing cached VAE")
+    }
 
+    modelConfigs = configs
+    quantManifest = manifest
+    modelSnapshot = snapshot
+    isModelLoaded = true
+    loadedModelId = modelId
+
+    logger.info("Model loaded successfully and cached in memory")
+  }
+  public func loadLoRA(_ config: LoRAConfiguration, progressHandler: ProgressHandler? = nil) async throws {
+    guard let trans = transformer else {
+      throw PipelineError.transformerNotLoaded
+    }
+    if let currentConfig = currentLoRAConfig, currentConfig == config {
+      logger.info("LoRA already loaded with same configuration, skipping")
+      return
+    }
+    if currentLoRA != nil {
+      logger.info("Unloading previous LoRA...")
+      unloadLoRA()
+    }
+
+    progressHandler?(GenerationProgress(stage: .loadingLoRA, stepIndex: 0, totalSteps: 1))
+    logger.info("Loading LoRA from \(config.source.displayName)...")
+
+    do {
+
+      let loraWeights = try await LoRAWeightLoader.load(from: config)
+      logger.info("Loaded LoRA: rank=\(loraWeights.rank), alpha=\(loraWeights.alpha), layers=\(loraWeights.layerCount)")
+
+      useDynamicLoRA = true
+      LoRAApplicator.applyDynamically(to: trans, loraWeights: loraWeights, scale: config.scale, logger: logger)
+
+      currentLoRA = loraWeights
+      currentLoRAConfig = config
+
+      logger.info("LoRA applied successfully with scale=\(config.scale)")
+    } catch let error as LoRAError {
+      throw PipelineError.loraError(error)
+    }
+  }
+  public var hasLoRALoaded: Bool {
+    return currentLoRA != nil
+  }
+  public var loadedLoRAConfig: LoRAConfiguration? {
+    return currentLoRAConfig
+  }
+
+  public func generate(_ request: ZImageGenerationRequest, progressHandler: ProgressHandler? = nil) async throws -> URL {
+    logger.info("Requested Z-Image generation")
+
+    let decoded = try await generateCore(request, progressHandler: progressHandler)
+
+    progressHandler?(GenerationProgress(stage: .saving, stepIndex: request.steps, totalSteps: request.steps))
+    try QwenImageIO.saveImage(array: decoded, to: request.outputPath)
+    logger.info("Wrote image to \(request.outputPath.path)")
+
+    return request.outputPath
+  }
+  public func generateToMemory(_ request: ZImageGenerationRequest, progressHandler: ProgressHandler? = nil) async throws -> Data {
+    logger.info("Requested Z-Image generation (to memory)")
+
+    let decoded = try await generateCore(request, progressHandler: progressHandler)
+
+    progressHandler?(GenerationProgress(stage: .saving, stepIndex: request.steps, totalSteps: request.steps))
+    let imageData = try QwenImageIO.imageData(from: decoded)
+    logger.info("Generated image data (\(imageData.count) bytes)")
+
+    return imageData
+  }
+  private func generateCore(_ request: ZImageGenerationRequest, progressHandler: ProgressHandler? = nil) async throws -> MLXArray {
+
+    let vaeScale = 16
+    if request.width % vaeScale != 0 {
+      throw PipelineError.invalidDimensions("Width must be divisible by \(vaeScale) (got \(request.width)). Please adjust to a multiple of \(vaeScale).")
+    }
+    if request.height % vaeScale != 0 {
+      throw PipelineError.invalidDimensions("Height must be divisible by \(vaeScale) (got \(request.height)). Please adjust to a multiple of \(vaeScale).")
+    }
+    let requestedModelId = request.model ?? ZImageRepository.id
+    if !isModelLoaded || loadedModelId != requestedModelId {
+      try await loadModel(modelSpec: request.model, progressHandler: progressHandler)
+    }
+
+    guard let tokenizer = tokenizer,
+          let textEncoder = textEncoder,
+          let transformer = transformer,
+          let vae = vae,
+          let modelConfigs = modelConfigs else {
+      throw PipelineError.modelNotLoaded
+    }
+    if let loraConfig = request.lora {
+
+      if currentLoRAConfig != loraConfig {
+        try await loadLoRA(loraConfig, progressHandler: progressHandler)
+      }
+    } else if currentLoRA != nil {
+
+      unloadLoRA()
+    }
+    progressHandler?(GenerationProgress(stage: .encodingText, stepIndex: 0, totalSteps: request.steps))
     var finalPrompt = request.prompt
     if request.enhancePrompt {
       logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
@@ -171,10 +405,15 @@ public struct ZImagePipeline {
       }
       GPU.clearCache()
     }
+    logger.info("Encoding prompts...")
 
-    let (promptEmbeds, _) = try encodePrompt(finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
-
+    let promptEmbeds: MLXArray
     let negativeEmbeds: MLXArray?
+    let doCFG = request.guidanceScale > 1.0
+
+    let (pe, _) = try encodePrompt(finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
+    promptEmbeds = pe
+
     if doCFG {
       let (ne, _) = try encodePrompt(request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
       negativeEmbeds = ne
@@ -183,26 +422,12 @@ public struct ZImagePipeline {
       negativeEmbeds = nil
       MLX.eval(promptEmbeds)
     }
-    logger.info("Text encoding complete, clearing text encoder from memory")
-    GPU.clearCache()
-
-    logger.info("Loading transformer...")
-    let transformer = try loadTransformer(snapshot: snapshot, config: modelConfigs.transformer)
-    let transformerWeights = try weightsMapper.loadTransformer()
-    ZImageWeightsMapping.applyTransformer(weights: transformerWeights, to: transformer, manifest: quantManifest, logger: logger)
-
-    if let loraPath = request.loraPath {
-      logger.info("Loading LoRA weights from: \(loraPath)")
-      let loraLoader = LoRALoader(logger: logger, hubApi: hubApi)
-      let loraWeights = try await loraLoader.loadLoRAWeights(from: loraPath)
-      applyLoRAWeights(to: transformer, loraWeights: loraWeights, loraScale: request.loraScale, logger: logger)
-    }
+    logger.info("Text encoding complete")
 
     let vaeDivisor = modelConfigs.vae.latentDivisor
     let latentH = max(1, request.height / vaeDivisor)
     let latentW = max(1, request.width / vaeDivisor)
     let shape: [Int] = [1, ZImageModelMetadata.Transformer.inChannels, latentH, latentW]
-
     let randomKey: RandomStateOrKey? = request.seed.map { MLXRandom.key($0) }
     var latents = MLXRandom.normal(shape, loc: 0, scale: 1, key: randomKey)
 
@@ -224,6 +449,8 @@ public struct ZImagePipeline {
 
     logger.info("Running \(request.steps) denoising steps...")
     for stepIndex in 0..<request.steps {
+      try Task.checkCancellation()
+      progressHandler?(GenerationProgress(stage: .denoising, stepIndex: stepIndex, totalSteps: request.steps))
       let timestep = timestepsArray[stepIndex]
       let normalizedTimestep = (1000.0 - timestep) / 1000.0
       let timestepArray = MLXArray([normalizedTimestep], [1])
@@ -251,55 +478,18 @@ public struct ZImagePipeline {
       MLX.eval(latents)
     }
 
-    logger.info("Denoising complete, loading VAE...")
-    GPU.clearCache()
-
-    let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
-    let vaeWeights = try weightsMapper.loadVAE()
-    ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
+    logger.info("Denoising complete, decoding with VAE...")
+    progressHandler?(GenerationProgress(stage: .decoding, stepIndex: request.steps, totalSteps: request.steps))
 
     let decoded = decodeLatents(latents, vae: vae, height: request.height, width: request.width)
-    try QwenImageIO.saveImage(array: decoded, to: request.outputPath)
-    logger.info("Wrote image to \(request.outputPath.path)")
-    return request.outputPath
+    MLX.eval(MLXArray([]))
+    GPU.clearCache()
+
+    return decoded
   }
 
   private func decodeLatents(_ latents: MLXArray, vae: AutoencoderKL, height: Int, width: Int) -> MLXArray {
-    let (decoded, _) = vae.decode(latents)
-    var image = decoded
-    if height != decoded.dim(2) || width != decoded.dim(3) {
-      var nhwc = image.transposed(0, 2, 3, 1)
-      let hScale = Float(height) / Float(decoded.dim(2))
-      let wScale = Float(width) / Float(decoded.dim(3))
-      nhwc = MLXNN.Upsample(scaleFactor: .array([hScale, wScale]), mode: .nearest)(nhwc)
-      image = nhwc.transposed(0, 3, 1, 2)
-    }
-    image = QwenImageIO.denormalizeFromDecoder(image)
-    return MLX.clip(image, min: 0, max: 1)
-  }
-
-  private func prepareSnapshot(model: String? = nil) async throws -> URL {
-    let filePatterns = [
-      "*.json",
-      "*.safetensors",
-      "tokenizer/*"
-    ]
-
-    let resolvedURL = try await ModelResolution.resolveOrDefault(
-      modelSpec: model,
-      defaultModelId: ZImageRepository.id,
-      defaultRevision: ZImageRepository.revision,
-      filePatterns: filePatterns,
-      progressHandler: { [logger] progress in
-        let completed = progress.completedUnitCount
-        let total = progress.totalUnitCount
-        let percent = Int(progress.fractionCompleted * 100)
-        logger.info("Downloading: \(completed)/\(total) files (\(percent)%)")
-      }
-    )
-
-    logger.info("Using model at \(resolvedURL.path)")
-    return resolvedURL
+    PipelineUtilities.decodeLatents(latents, vae: vae, height: height, width: width)
   }
 
   private func calculateShift(
@@ -309,9 +499,21 @@ public struct ZImagePipeline {
     baseShift: Float,
     maxShift: Float
   ) -> Float {
-    let m = (maxShift - baseShift) / Float(maxSeqLen - baseSeqLen)
-    let b = baseShift - m * Float(baseSeqLen)
-    return Float(imageSeqLen) * m + b
+    PipelineUtilities.calculateShift(
+      imageSeqLen: imageSeqLen,
+      baseSeqLen: baseSeqLen,
+      maxSeqLen: maxSeqLen,
+      baseShift: baseShift,
+      maxShift: maxShift
+    )
+  }
+
+  private func areZImageVariants(_ model1: String, _ model2: String) -> Bool {
+    let zImageIds: Set<String> = [
+      "Tongyi-MAI/Z-Image-Turbo",
+      "mzbac/Z-Image-Turbo-8bit"
+    ]
+    return zImageIds.contains(model1) && zImageIds.contains(model2)
   }
 
 }

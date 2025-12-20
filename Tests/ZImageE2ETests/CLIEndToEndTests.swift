@@ -116,13 +116,13 @@ final class CLIEndToEndTests: XCTestCase {
       "control",
       "-p", "A hyper-realistic close-up portrait of a leopard face hiding behind dense green jungle leaves, camouflaged, direct eye contact, intricate fur detail, bright yellow eyes, cinematic lighting, soft shadows, National Geographic photography, 8k, sharp focus, depth of field",
       "-c", controlImagePath,
-      "--cw", "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union",
+      "--cw", "mzbac/Z-Image-Turbo-Fun-Controlnet-Union-2.1-8bit",
       "--cs", "0.75",
       "-W", "512",
       "-H", "512",
       "-s", "9",
       "-o", outputPath,
-      "-m", "mzbac/z-image-turbo-8bit"
+      "-m", "mzbac/Z-Image-Turbo-8bit"
     ], timeout: 300)
 
     if exitCode != 0 {
@@ -144,13 +144,13 @@ final class CLIEndToEndTests: XCTestCase {
       "control",
       "-p", "A hyperrealistic architectural photograph of a spacious, minimalist modern hallway interior. Large floor-to-ceiling windows on the right wall fill the space with bright natural daylight. A light gray sectional sofa and a low, modern coffee table are placed in the foreground on a light wood floor. A large potted plant is visible further down the hallway. White walls, clean lines, serene atmosphere, highly detailed, 8k resolution, cinematic lighting",
       "-c", controlImagePath,
-      "--cw", "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union",
+      "--cw", "mzbac/Z-Image-Turbo-Fun-Controlnet-Union-2.1-8bit",
       "--cs", "0.75",
       "-W", "512",
       "-H", "512",
       "-s", "9",
       "-o", outputPath,
-      "-m", "mzbac/z-image-turbo-8bit"
+      "-m", "mzbac/Z-Image-Turbo-8bit"
     ], timeout: 300)
 
     if exitCode != 0 {
@@ -172,13 +172,13 @@ final class CLIEndToEndTests: XCTestCase {
       "control",
       "-p", "A photorealistic film still of a man in a dark shirt sitting at a dining table in a modern kitchen at night, looking down at a bowl of soup. A glass bottle and a glass of white wine are in the foreground. Warm, low, cinematic lighting, soft shadows, shallow depth of field, contemplative atmosphere, highly detailed.",
       "-c", controlImagePath,
-      "--cw", "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union",
+      "--cw", "mzbac/Z-Image-Turbo-Fun-Controlnet-Union-2.1-8bit",
       "--cs", "0.75",
       "-W", "512",
       "-H", "512",
       "-s", "9",
       "-o", outputPath,
-      "-m", "mzbac/z-image-turbo-8bit"
+      "-m", "mzbac/Z-Image-Turbo-8bit"
     ], timeout: 300)
 
     if exitCode != 0 {
@@ -200,13 +200,13 @@ final class CLIEndToEndTests: XCTestCase {
       "control",
       "-p", "一位年轻女子站在阳光明媚的海岸线上，白裙在轻拂的海风中微微飘动。她拥有一头鲜艳的紫色长发，在风中轻盈舞动",
       "-c", controlImagePath,
-      "--cw", "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union",
+      "--cw", "mzbac/Z-Image-Turbo-Fun-Controlnet-Union-2.1-8bit",
       "--cs", "0.75",
       "-W", "512",
       "-H", "512",
       "-s", "9",
       "-o", outputPath,
-      "-m", "mzbac/z-image-turbo-8bit"
+      "-m", "mzbac/Z-Image-Turbo-8bit"
     ], timeout: 300)
 
     if exitCode != 0 {
@@ -242,7 +242,7 @@ final class CLIEndToEndTests: XCTestCase {
     let (stdout, stderr, exitCode) = try await runCLI([
       "control",
       "-p", "test",
-      "--cw", "alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union",
+      "--cw", "mzbac/Z-Image-Turbo-Fun-Controlnet-Union-2.1-8bit",
       "-o", outputPath
     ])
 
