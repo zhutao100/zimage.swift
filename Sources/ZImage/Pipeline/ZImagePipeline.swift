@@ -551,10 +551,7 @@ public final class ZImagePipeline {
       progressHandler: progressHandler
     )
 
-    guard let tokenizer = tokenizer,
-          let textEncoder = textEncoder,
-          let transformer = transformer,
-          let vae = vae,
+    guard let vae = vae,
           let modelConfigs = modelConfigs else {
       throw PipelineError.modelNotLoaded
     }
@@ -573,42 +570,53 @@ public final class ZImagePipeline {
       unloadLoRA()
     }
     progressHandler?(GenerationProgress(stage: .encodingText, stepIndex: 0, totalSteps: request.steps))
-    var finalPrompt = request.prompt
-    if request.enhancePrompt {
-      logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
-      let enhanceConfig = PromptEnhanceConfig(
-        maxNewTokens: request.enhanceMaxTokens,
-        temperature: 0.7,
-        topP: 0.9,
-        repetitionPenalty: 1.05
-      )
-      let enhanced = try textEncoder.enhancePrompt(request.prompt, tokenizer: tokenizer, config: enhanceConfig)
-      if enhanced.isEmpty {
-        logger.warning("Prompt enhancement incomplete (need more tokens), using original prompt")
-      } else {
-        logger.info("Enhanced prompt: \(enhanced)")
-        finalPrompt = enhanced
-      }
-      GPU.clearCache()
-    }
     logger.info("Encoding prompts...")
 
+    let doCFG = request.guidanceScale > 1.0
     let promptEmbeds: MLXArray
     let negativeEmbeds: MLXArray?
-    let doCFG = request.guidanceScale > 1.0
+    do {
+      guard let tokenizer = tokenizer else {
+        throw PipelineError.tokenizerNotLoaded
+      }
+      guard let textEncoder = textEncoder else {
+        throw PipelineError.textEncoderNotLoaded
+      }
 
-    let (pe, _) = try encodePrompt(finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
-    promptEmbeds = pe
+      var finalPrompt = request.prompt
+      if request.enhancePrompt {
+        logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
+        let enhanceConfig = PromptEnhanceConfig(
+          maxNewTokens: request.enhanceMaxTokens,
+          temperature: 0.7,
+          topP: 0.9,
+          repetitionPenalty: 1.05
+        )
+        let enhanced = try textEncoder.enhancePrompt(request.prompt, tokenizer: tokenizer, config: enhanceConfig)
+        if enhanced.isEmpty {
+          logger.warning("Prompt enhancement incomplete (need more tokens), using original prompt")
+        } else {
+          logger.info("Enhanced prompt: \(enhanced)")
+          finalPrompt = enhanced
+        }
+        GPU.clearCache()
+      }
 
-    if doCFG {
-      let (ne, _) = try encodePrompt(request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
-      negativeEmbeds = ne
-      MLX.eval(promptEmbeds, ne)
-    } else {
-      negativeEmbeds = nil
-      MLX.eval(promptEmbeds)
+      let (pe, _) = try encodePrompt(finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
+      promptEmbeds = pe
+
+      if doCFG {
+        let (ne, _) = try encodePrompt(request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
+        negativeEmbeds = ne
+        MLX.eval(promptEmbeds, ne)
+      } else {
+        negativeEmbeds = nil
+        MLX.eval(promptEmbeds)
+      }
     }
     logger.info("Text encoding complete")
+    self.textEncoder = nil
+    GPU.clearCache()
 
     let vaeDivisor = modelConfigs.vae.latentDivisor
     let latentH = max(1, request.height / vaeDivisor)
@@ -634,37 +642,43 @@ public final class ZImagePipeline {
     let timestepsArray = scheduler.timesteps.asArray(Float.self)
 
     logger.info("Running \(request.steps) denoising steps...")
-    for stepIndex in 0..<request.steps {
-      try Task.checkCancellation()
-      progressHandler?(GenerationProgress(stage: .denoising, stepIndex: stepIndex, totalSteps: request.steps))
-      let timestep = timestepsArray[stepIndex]
-      let normalizedTimestep = (1000.0 - timestep) / 1000.0
-      let timestepArray = MLXArray([normalizedTimestep], [1])
-
-      var modelLatents = latents
-      var embeds = promptEmbeds
-      if doCFG, let ne = negativeEmbeds {
-        modelLatents = MLX.concatenated([latents, latents], axis: 0)
-        embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
+    do {
+      guard let transformer = transformer else {
+        throw PipelineError.transformerNotLoaded
       }
+      for stepIndex in 0..<request.steps {
+        try Task.checkCancellation()
+        progressHandler?(GenerationProgress(stage: .denoising, stepIndex: stepIndex, totalSteps: request.steps))
+        let timestep = timestepsArray[stepIndex]
+        let normalizedTimestep = (1000.0 - timestep) / 1000.0
+        let timestepArray = MLXArray([normalizedTimestep], [1])
 
-      let noisePred = transformer.forward(latents: modelLatents, timestep: timestepArray, promptEmbeds: embeds)
-      var guidedNoise: MLXArray
-      if doCFG, negativeEmbeds != nil {
-        let batch = latents.dim(0)
-        let positive = noisePred[0 ..< batch, 0..., 0..., 0...]
-        let negative = noisePred[batch ..< batch * 2, 0..., 0..., 0...]
-        guidedNoise = positive + request.guidanceScale * (positive - negative)
-      } else {
-        guidedNoise = noisePred
+        var modelLatents = latents
+        var embeds = promptEmbeds
+        if doCFG, let ne = negativeEmbeds {
+          modelLatents = MLX.concatenated([latents, latents], axis: 0)
+          embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
+        }
+
+        let noisePred = transformer.forward(latents: modelLatents, timestep: timestepArray, promptEmbeds: embeds)
+        let guidedNoise: MLXArray
+        if doCFG, negativeEmbeds != nil {
+          let batch = latents.dim(0)
+          let positive = noisePred[0 ..< batch, 0..., 0..., 0...]
+          let negative = noisePred[batch ..< batch * 2, 0..., 0..., 0...]
+          guidedNoise = positive + request.guidanceScale * (positive - negative)
+        } else {
+          guidedNoise = noisePred
+        }
+
+        latents = scheduler.step(modelOutput: -guidedNoise, timestepIndex: stepIndex, sample: latents)
+        MLX.eval(latents)
       }
-
-      guidedNoise = -guidedNoise
-      latents = scheduler.step(modelOutput: guidedNoise, timestepIndex: stepIndex, sample: latents)
-      MLX.eval(latents)
+      transformer.clearCache()
     }
 
     progressHandler?(GenerationProgress(stage: .denoising, stepIndex: request.steps, totalSteps: request.steps))
+    unloadTransformer()
     logger.info("Denoising complete, decoding with VAE...")
     progressHandler?(GenerationProgress(stage: .decoding, stepIndex: request.steps, totalSteps: request.steps))
 

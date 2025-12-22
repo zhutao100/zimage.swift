@@ -11,14 +11,14 @@ This document explains why Z-Image.swift can show higher peak resident memory (R
 
 ## Pipeline Shape Today (As of `370f2d65`)
 
-The standard pipeline is **stateful and cached**:
+The standard pipeline loads components through `loadModel(...)`, but **intentionally releases large modules across phases during a generation** to reduce peak RSS:
 
-- **Model load (`loadModel`)** loads and retains tokenizer, text encoder, transformer, and a **decoder-only VAE**.
+- **Model load (`loadModel`)** loads tokenizer, text encoder, transformer, and a **decoder-only VAE**.
   - Code: `Sources/ZImage/Pipeline/ZImagePipeline.swift`
-- **Generation (`generateCore`)** encodes prompts, runs the denoising loop on the transformer, then decodes latents with the VAE.
+- **Generation (`generateCore`)** encodes prompts, then unloads the text encoder; runs denoising, then unloads the transformer before VAE decode.
   - Code: `Sources/ZImage/Pipeline/ZImagePipeline.swift`, `Sources/ZImage/Pipeline/PipelineUtilities.swift`
 
-Implication: by default, weights stay resident between generations for speed. Memory “peaks” are therefore dominated by **decode-time workspaces** and allocator behavior, not repeated load/unload cycles.
+Implication: by default, the transformer/text-encoder are reloaded across generations, trading throughput for lower peak memory during VAE decode.
 
 ## Major Memory Contributors
 
@@ -70,6 +70,6 @@ Current mitigations that materially reduce peak memory:
 These are the remaining high-leverage options:
 
 - **Tile/stripe VAE decode:** the most robust way to cap memory; bounds the im2col workspace to a fixed tile size.
-- **Offload transformer before decode (optional):** call `ZImagePipeline.unloadTransformer()` when memory is constrained and you don’t need fast repeated generations; the next generation will pay reload cost.
+- **Offload transformer before decode (default):** `generateCore` clears transformer caches and unloads the transformer before VAE decode to lower the baseline resident memory at the peak point.
 - **Reduce model-load peak further:** implement streaming VAE weight apply to avoid holding both the raw tensor dictionary and the transposed mapping at once (see `docs/vae-streaming@21136131.md` for a prior attempt/notes).
 - **Tune allocator caching:** the CLI supports `--cache-limit` (calls `GPU.set(cacheLimit:)` in `Sources/ZImageCLI/main.swift`). This helps memory return faster after peaks but doesn’t change the true workspace requirement at peak decode.

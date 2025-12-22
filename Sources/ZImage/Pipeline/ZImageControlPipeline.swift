@@ -579,6 +579,7 @@ public class ZImageControlPipeline {
     transformer = nil
     currentLoRA = nil
     currentLoRAConfig = nil
+    loadedControlnetWeightsId = nil
     GPU.clearCache()
     logger.info("Transformer unloaded for memory optimization")
   }
@@ -877,47 +878,50 @@ public class ZImageControlPipeline {
         try await applyLoRAIfNeeded(loraConfig)
       }
     }
-    guard let transformer = self.transformer else {
-      throw PipelineError.transformerNotLoaded
-    }
     logger.info("Running \(request.steps) denoising steps with control_context_scale=\(request.controlContextScale)...")
-    for stepIndex in 0..<request.steps {
-      try Task.checkCancellation()
-      request.progressCallback?(ControlProgress(
-        stage: "Denoising",
-        stepIndex: stepIndex,
-        totalSteps: request.steps,
-        fractionCompleted: Double(stepIndex) / Double(request.steps)
-      ))
-      let timestep = timestepsArray[stepIndex]
-      let normalizedTimestep = (1000.0 - timestep) / 1000.0
-      let timestepArray = MLXArray([normalizedTimestep], [1])
-      var modelLatents = latents
-      var embeds = promptEmbeds
-      if doCFG, let ne = negativeEmbeds {
-        modelLatents = MLX.concatenated([latents, latents], axis: 0)
-        embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
+    do {
+      guard let transformer = self.transformer else {
+        throw PipelineError.transformerNotLoaded
       }
-      let noisePred = transformer.forward(
-        latents: modelLatents,
-        timestep: timestepArray,
-        promptEmbeds: embeds,
-        controlContext: controlContext,
-        controlContextScale: request.controlContextScale
-      )
-      var guidedNoise: MLXArray
-      if doCFG, negativeEmbeds != nil {
-        let batch = latents.dim(0)
-        let positive = noisePred[0 ..< batch, 0..., 0..., 0...]
-        let negative = noisePred[batch ..< batch * 2, 0..., 0..., 0...]
-        guidedNoise = positive + request.guidanceScale * (positive - negative)
-      } else {
-        guidedNoise = noisePred
+      for stepIndex in 0..<request.steps {
+        try Task.checkCancellation()
+        request.progressCallback?(ControlProgress(
+          stage: "Denoising",
+          stepIndex: stepIndex,
+          totalSteps: request.steps,
+          fractionCompleted: Double(stepIndex) / Double(request.steps)
+        ))
+        let timestep = timestepsArray[stepIndex]
+        let normalizedTimestep = (1000.0 - timestep) / 1000.0
+        let timestepArray = MLXArray([normalizedTimestep], [1])
+        var modelLatents = latents
+        var embeds = promptEmbeds
+        if doCFG, let ne = negativeEmbeds {
+          modelLatents = MLX.concatenated([latents, latents], axis: 0)
+          embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
+        }
+        let noisePred = transformer.forward(
+          latents: modelLatents,
+          timestep: timestepArray,
+          promptEmbeds: embeds,
+          controlContext: controlContext,
+          controlContextScale: request.controlContextScale
+        )
+        let guidedNoise: MLXArray
+        if doCFG, negativeEmbeds != nil {
+          let batch = latents.dim(0)
+          let positive = noisePred[0 ..< batch, 0..., 0..., 0...]
+          let negative = noisePred[batch ..< batch * 2, 0..., 0..., 0...]
+          guidedNoise = positive + request.guidanceScale * (positive - negative)
+        } else {
+          guidedNoise = noisePred
+        }
+        latents = scheduler.step(modelOutput: -guidedNoise, timestepIndex: stepIndex, sample: latents)
+        MLX.eval(latents)
       }
-      guidedNoise = -guidedNoise
-      latents = scheduler.step(modelOutput: guidedNoise, timestepIndex: stepIndex, sample: latents)
-      MLX.eval(latents)
+      transformer.clearCache()
     }
+    unloadTransformer()
     request.progressCallback?(ControlProgress(
       stage: "Denoising",
       stepIndex: request.steps,
@@ -931,7 +935,6 @@ public class ZImageControlPipeline {
       fractionCompleted: 1.0
     ))
     logger.info("Denoising complete, decoding latents...")
-    GPU.clearCache()
     guard let outputPath = request.outputPath else {
       throw PipelineError.outputPathRequired
     }
@@ -1202,47 +1205,50 @@ public class ZImageControlPipeline {
         try await applyLoRAIfNeeded(loraConfig)
       }
     }
-    guard let transformer = self.transformer else {
-      throw PipelineError.transformerNotLoaded
-    }
     logger.info("Running \(request.steps) denoising steps with control_context_scale=\(request.controlContextScale)...")
-    for stepIndex in 0..<request.steps {
-      try Task.checkCancellation()
-      request.progressCallback?(ControlProgress(
-        stage: "Denoising",
-        stepIndex: stepIndex,
-        totalSteps: request.steps,
-        fractionCompleted: Double(stepIndex) / Double(request.steps)
-      ))
-      let timestep = timestepsArray[stepIndex]
-      let normalizedTimestep = (1000.0 - timestep) / 1000.0
-      let timestepArray = MLXArray([normalizedTimestep], [1])
-      var modelLatents = latents
-      var embeds = promptEmbeds
-      if doCFG, let ne = negativeEmbeds {
-        modelLatents = MLX.concatenated([latents, latents], axis: 0)
-        embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
+    do {
+      guard let transformer = self.transformer else {
+        throw PipelineError.transformerNotLoaded
       }
-      let noisePred = transformer.forward(
-        latents: modelLatents,
-        timestep: timestepArray,
-        promptEmbeds: embeds,
-        controlContext: controlContext,
-        controlContextScale: request.controlContextScale
-      )
-      var guidedNoise: MLXArray
-      if doCFG, negativeEmbeds != nil {
-        let batch = latents.dim(0)
-        let positive = noisePred[0 ..< batch, 0..., 0..., 0...]
-        let negative = noisePred[batch ..< batch * 2, 0..., 0..., 0...]
-        guidedNoise = positive + request.guidanceScale * (positive - negative)
-      } else {
-        guidedNoise = noisePred
+      for stepIndex in 0..<request.steps {
+        try Task.checkCancellation()
+        request.progressCallback?(ControlProgress(
+          stage: "Denoising",
+          stepIndex: stepIndex,
+          totalSteps: request.steps,
+          fractionCompleted: Double(stepIndex) / Double(request.steps)
+        ))
+        let timestep = timestepsArray[stepIndex]
+        let normalizedTimestep = (1000.0 - timestep) / 1000.0
+        let timestepArray = MLXArray([normalizedTimestep], [1])
+        var modelLatents = latents
+        var embeds = promptEmbeds
+        if doCFG, let ne = negativeEmbeds {
+          modelLatents = MLX.concatenated([latents, latents], axis: 0)
+          embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
+        }
+        let noisePred = transformer.forward(
+          latents: modelLatents,
+          timestep: timestepArray,
+          promptEmbeds: embeds,
+          controlContext: controlContext,
+          controlContextScale: request.controlContextScale
+        )
+        let guidedNoise: MLXArray
+        if doCFG, negativeEmbeds != nil {
+          let batch = latents.dim(0)
+          let positive = noisePred[0 ..< batch, 0..., 0..., 0...]
+          let negative = noisePred[batch ..< batch * 2, 0..., 0..., 0...]
+          guidedNoise = positive + request.guidanceScale * (positive - negative)
+        } else {
+          guidedNoise = noisePred
+        }
+        latents = scheduler.step(modelOutput: -guidedNoise, timestepIndex: stepIndex, sample: latents)
+        MLX.eval(latents)
       }
-      guidedNoise = -guidedNoise
-      latents = scheduler.step(modelOutput: guidedNoise, timestepIndex: stepIndex, sample: latents)
-      MLX.eval(latents)
+      transformer.clearCache()
     }
+    unloadTransformer()
     request.progressCallback?(ControlProgress(
       stage: "Denoising",
       stepIndex: request.steps,
@@ -1256,7 +1262,6 @@ public class ZImageControlPipeline {
       fractionCompleted: 1.0
     ))
     logger.info("Denoising complete, decoding latents...")
-    GPU.clearCache()
     let decoded = decodeLatents(latents, vae: vae, height: request.height, width: request.width)
     let imageData = try QwenImageIO.imageData(from: decoded)
     logger.info("Generated image data (\(imageData.count) bytes)")

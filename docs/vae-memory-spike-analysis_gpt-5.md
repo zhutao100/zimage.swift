@@ -86,7 +86,7 @@ This is why “bf16 end-to-end + fewer overlaps” is necessary but may still no
 The remaining fixes are about bounding or avoiding the workspace:
 
 - **Tile/stripe VAE decode (best):** decode in smaller spatial tiles to cap workspace size. This is the only approach that gives a predictable memory ceiling.
-- **Offload transformer before decode (optional):** `ZImagePipeline.unloadTransformer()` reduces baseline resident memory before VAE decode at the cost of reload time later.
+- **Offload transformer before decode (default):** the pipelines clear transformer caches and unload the transformer before VAE decode to reduce baseline resident memory (the next generation will reload it).
 - **Reduce model-load spikes (optional):** VAE weight application still transposes 4D tensors into a mapped dictionary (`vaeMapping(...)` in `Sources/ZImage/Weights/WeightsMapping.swift`). A streaming apply can reduce the model-load peak further (see `docs/vae-streaming@21136131.md` for notes).
 
 ## Quick Sanity Checks for Debugging
