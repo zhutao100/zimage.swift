@@ -64,6 +64,7 @@ public struct ModelResolution {
     defaultModelId: String = ZImageRepository.id,
     defaultRevision: String = ZImageRepository.revision,
     filePatterns: [String] = ["*.safetensors", "*.json", "tokenizer/*"],
+    requireWeights: Bool = true,
     progressHandler: (@Sendable (Progress) -> Void)? = nil
   ) async throws -> URL {
     let localURL = URL(fileURLWithPath: modelSpec).standardizedFileURL
@@ -79,7 +80,7 @@ public struct ModelResolution {
     let modelId = String(parts[0])
     let revision = parts.count > 1 ? String(parts[1]) : defaultRevision
 
-    if let cachedURL = findCachedModel(modelId: modelId) {
+    if let cachedURL = findCachedModel(modelId: modelId, requireWeights: requireWeights) {
       return cachedURL
     }
 
@@ -96,6 +97,7 @@ public struct ModelResolution {
     defaultModelId: String = ZImageRepository.id,
     defaultRevision: String = ZImageRepository.revision,
     filePatterns: [String] = ["*.safetensors", "*.json", "tokenizer/*"],
+    requireWeights: Bool = true,
     progressHandler: (@Sendable (Progress) -> Void)? = nil
   ) async throws -> URL {
     if let spec = modelSpec {
@@ -104,11 +106,12 @@ public struct ModelResolution {
         defaultModelId: defaultModelId,
         defaultRevision: defaultRevision,
         filePatterns: filePatterns,
+        requireWeights: requireWeights,
         progressHandler: progressHandler
       )
     }
 
-    if let cachedURL = findCachedModel(modelId: defaultModelId) {
+    if let cachedURL = findCachedModel(modelId: defaultModelId, requireWeights: requireWeights) {
       return cachedURL
     }
 

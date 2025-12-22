@@ -24,6 +24,7 @@ public struct ZImageGenerationRequest: Sendable {
   public var enhancePrompt: Bool
 
   public var enhanceMaxTokens: Int
+  public var forceTransformerOverrideOnly: Bool
 
   public init(
     prompt: String,
@@ -38,7 +39,8 @@ public struct ZImageGenerationRequest: Sendable {
     maxSequenceLength: Int = 512,
     lora: LoRAConfiguration? = nil,
     enhancePrompt: Bool = false,
-    enhanceMaxTokens: Int = 512
+    enhanceMaxTokens: Int = 512,
+    forceTransformerOverrideOnly: Bool = false
   ) {
     self.prompt = prompt
     self.negativePrompt = negativePrompt
@@ -53,6 +55,7 @@ public struct ZImageGenerationRequest: Sendable {
     self.lora = lora
     self.enhancePrompt = enhancePrompt
     self.enhanceMaxTokens = enhanceMaxTokens
+    self.forceTransformerOverrideOnly = forceTransformerOverrideOnly
   }
 }
 
@@ -84,6 +87,7 @@ public final class ZImagePipeline {
   private var modelSnapshot: URL?
   private var useDynamicLoRA: Bool = false
   private var activeTransformerOverrideURL: URL?
+  private var activeAIOCheckpointURL: URL?
 
   public init(logger: Logger = Logger(label: "z-image.pipeline"), hubApi: HubApi = .shared) {
     self.logger = logger
@@ -107,6 +111,7 @@ public final class ZImagePipeline {
     modelSnapshot = nil
     useDynamicLoRA = false
     activeTransformerOverrideURL = nil
+    activeAIOCheckpointURL = nil
     GPU.clearCache()
     logger.info("Model unloaded from memory")
   }
@@ -202,15 +207,21 @@ public final class ZImagePipeline {
     }
   }
 
-  private func resolveModelSpecAndOverride(_ modelSpec: String?) -> (baseModelSpec: String?, transformerOverrideURL: URL?) {
-    guard let modelSpec else { return (baseModelSpec: nil, transformerOverrideURL: nil) }
+  struct ModelSelection: Sendable {
+    var baseModelSpec: String?
+    var transformerOverrideURL: URL?
+    var aioCheckpointURL: URL?
+    var aioTextEncoderPrefix: String?
+  }
+
+  func resolveModelSelection(_ modelSpec: String?, forceTransformerOverrideOnly: Bool) -> ModelSelection {
+    guard let modelSpec else { return .init(baseModelSpec: nil, transformerOverrideURL: nil, aioCheckpointURL: nil, aioTextEncoderPrefix: nil) }
 
     let candidateURL = URL(fileURLWithPath: modelSpec)
     var isDir: ObjCBool = false
     if FileManager.default.fileExists(atPath: candidateURL.path, isDirectory: &isDir) {
       if !isDir.boolValue && candidateURL.pathExtension == "safetensors" {
-        logger.info("Using transformer override file: \(candidateURL.lastPathComponent)")
-        return (baseModelSpec: nil, transformerOverrideURL: candidateURL)
+        return resolveLocalSafetensors(candidateURL, forceTransformerOverrideOnly: forceTransformerOverrideOnly)
       }
       if isDir.boolValue {
         let required = [
@@ -220,14 +231,14 @@ public final class ZImagePipeline {
         ]
         let hasStructure = required.allSatisfy { FileManager.default.fileExists(atPath: candidateURL.appending(path: $0).path) }
         if hasStructure {
-          return (baseModelSpec: modelSpec, transformerOverrideURL: nil)
+          return .init(baseModelSpec: modelSpec, transformerOverrideURL: nil, aioCheckpointURL: nil, aioTextEncoderPrefix: nil)
         }
 
         let contents = (try? FileManager.default.contentsOfDirectory(at: candidateURL, includingPropertiesForKeys: [.fileSizeKey])) ?? []
         let safes = contents.filter { $0.pathExtension == "safetensors" }
         if safes.isEmpty {
           logger.warning("Model path is a directory without expected configs or safetensors: \(modelSpec). Falling back to default model.")
-          return (baseModelSpec: nil, transformerOverrideURL: nil)
+          return .init(baseModelSpec: nil, transformerOverrideURL: nil, aioCheckpointURL: nil, aioTextEncoderPrefix: nil)
         }
 
         let preferred = safes.first(where: { $0.lastPathComponent.lowercased().contains("v2") })
@@ -237,20 +248,46 @@ public final class ZImagePipeline {
             return sa < sb
           })
 
-        if let preferred {
-          logger.info("Using transformer override file from directory: \(preferred.lastPathComponent)")
+        guard let preferred else {
+          return .init(baseModelSpec: nil, transformerOverrideURL: nil, aioCheckpointURL: nil, aioTextEncoderPrefix: nil)
         }
-        return (baseModelSpec: nil, transformerOverrideURL: preferred)
+        return resolveLocalSafetensors(preferred, forceTransformerOverrideOnly: forceTransformerOverrideOnly, sourceDirectory: candidateURL)
       }
 
-      return (baseModelSpec: modelSpec, transformerOverrideURL: nil)
+      return .init(baseModelSpec: modelSpec, transformerOverrideURL: nil, aioCheckpointURL: nil, aioTextEncoderPrefix: nil)
     }
 
-    return (baseModelSpec: modelSpec, transformerOverrideURL: nil)
+    return .init(baseModelSpec: modelSpec, transformerOverrideURL: nil, aioCheckpointURL: nil, aioTextEncoderPrefix: nil)
+  }
+
+  private func resolveLocalSafetensors(
+    _ url: URL,
+    forceTransformerOverrideOnly: Bool,
+    sourceDirectory: URL? = nil
+  ) -> ModelSelection {
+    if !forceTransformerOverrideOnly {
+      let inspection = ZImageAIOCheckpoint.inspect(fileURL: url)
+      if inspection.isAIO, let prefix = inspection.textEncoderPrefix {
+        if let sourceDirectory {
+          logger.info("Detected AIO checkpoint in \(sourceDirectory.lastPathComponent): \(url.lastPathComponent). Bypassing base model weights.")
+        } else {
+          logger.info("Detected AIO checkpoint: \(url.lastPathComponent). Bypassing base model weights.")
+        }
+        return .init(baseModelSpec: nil, transformerOverrideURL: nil, aioCheckpointURL: url, aioTextEncoderPrefix: prefix)
+      }
+    }
+
+    if let sourceDirectory {
+      logger.info("Using transformer override file from directory: \(url.lastPathComponent)")
+    } else {
+      logger.info("Using transformer override file: \(url.lastPathComponent)")
+    }
+    return .init(baseModelSpec: nil, transformerOverrideURL: url, aioCheckpointURL: nil, aioTextEncoderPrefix: nil)
   }
 
   private func applyTransformerOverrideIfNeeded(_ overrideURL: URL?) throws {
     guard overrideURL != activeTransformerOverrideURL else { return }
+    guard activeAIOCheckpointURL == nil else { return }
     guard let transformer, let snapshot = modelSnapshot, let configs = modelConfigs else { throw PipelineError.modelNotLoaded }
 
     let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
@@ -299,16 +336,26 @@ public final class ZImagePipeline {
   }
 
   public typealias ProgressHandler = (GenerationProgress) -> Void
-  public func loadModel(modelSpec: String? = nil, progressHandler: ProgressHandler? = nil) async throws {
+  public func loadModel(
+    modelSpec: String? = nil,
+    aioCheckpointURL: URL? = nil,
+    aioTextEncoderPrefix: String? = nil,
+    progressHandler: ProgressHandler? = nil
+  ) async throws {
     let modelId = modelSpec ?? ZImageRepository.id
-    if isModelLoaded && loadedModelId == modelId {
+    let normalizedAIOPath = aioCheckpointURL?.standardizedFileURL.path
+    let currentAIOPath = activeAIOCheckpointURL?.standardizedFileURL.path
+    let hasLoadedComponents = tokenizer != nil && textEncoder != nil && transformer != nil && vae != nil && modelConfigs != nil && modelSnapshot != nil
+    if isModelLoaded && loadedModelId == modelId && normalizedAIOPath == currentAIOPath && hasLoadedComponents {
       logger.info("Model already loaded, skipping load")
       return
     }
     let canPreserveSharedComponents = isModelLoaded
       && loadedModelId != modelId
+      && currentAIOPath == nil
+      && normalizedAIOPath == nil
       && areZImageVariants(loadedModelId ?? "", modelId)
-    if isModelLoaded && loadedModelId != modelId {
+    if isModelLoaded && (loadedModelId != modelId || normalizedAIOPath != currentAIOPath) {
       if canPreserveSharedComponents {
         logger.info("Switching Z-Image variant, preserving VAE and tokenizer")
 
@@ -327,14 +374,9 @@ public final class ZImagePipeline {
     logger.info("Loading model: \(modelId)")
     progressHandler?(GenerationProgress(stage: .loadingModel, stepIndex: 0, totalSteps: 1))
 
-    let snapshot = try await PipelineSnapshot.prepare(model: modelSpec, logger: logger)
+    let snapshotFilePatterns: [String]? = aioCheckpointURL == nil ? nil : PipelineSnapshot.configAndTokenizerFilePatterns
+    let snapshot = try await PipelineSnapshot.prepare(model: modelSpec, filePatterns: snapshotFilePatterns, logger: logger)
     let configs = try ZImageModelConfigs.load(from: snapshot)
-    let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
-    let manifest = weightsMapper.loadQuantizationManifest()
-
-    if let m = manifest {
-      logger.info("Loading quantized model (bits=\(m.bits), group_size=\(m.groupSize))")
-    }
     if tokenizer == nil {
       progressHandler?(GenerationProgress(stage: .encodingText, stepIndex: 0, totalSteps: 1))
       logger.info("Loading tokenizer...")
@@ -342,32 +384,87 @@ public final class ZImagePipeline {
     } else {
       logger.info("Reusing cached tokenizer")
     }
-    logger.info("Loading text encoder...")
-    let te = try loadTextEncoder(snapshot: snapshot, config: configs.textEncoder)
-    let textEncoderWeights = try weightsMapper.loadTextEncoder()
-    ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: te, manifest: manifest, logger: logger)
-    textEncoder = te
-    progressHandler?(GenerationProgress(stage: .loadingTransformer, stepIndex: 0, totalSteps: 1))
-    logger.info("Loading transformer...")
-    let trans = try loadTransformer(snapshot: snapshot, config: configs.transformer)
-    let transformerWeights = try weightsMapper.loadTransformer()
-    ZImageWeightsMapping.applyTransformer(weights: transformerWeights, to: trans, manifest: manifest, logger: logger)
-    transformer = trans
-    activeTransformerOverrideURL = nil
-    if vae == nil {
-      progressHandler?(GenerationProgress(stage: .loadingVAE, stepIndex: 0, totalSteps: 1))
-      logger.info("Loading VAE...")
-      let v = try loadVAEDecoder(snapshot: snapshot, config: configs.vae)
-      let vaeWeights = try weightsMapper.loadVAE()
-      let decoderWeights = vaeWeights.filter { $0.key.hasPrefix("decoder.") }
-      ZImageWeightsMapping.applyVAE(weights: decoderWeights, to: v, manifest: manifest, logger: logger)
-      vae = v
+    if let aioCheckpointURL {
+      let textEncoderPrefix: String
+      if let aioTextEncoderPrefix, !aioTextEncoderPrefix.isEmpty {
+        textEncoderPrefix = aioTextEncoderPrefix
+      } else {
+        let inspection = ZImageAIOCheckpoint.inspect(fileURL: aioCheckpointURL)
+        guard inspection.isAIO, let inferred = inspection.textEncoderPrefix else {
+          let reason = inspection.diagnostics.isEmpty ? "unknown" : inspection.diagnostics.joined(separator: "; ")
+          throw PipelineError.weightsMissing("Not a valid AIO checkpoint: \(aioCheckpointURL.lastPathComponent) (\(reason)). Use --force-transformer-override-only to treat it as transformer-only.")
+        }
+        textEncoderPrefix = inferred
+      }
+
+      logger.info("Loading AIO checkpoint weights from \(aioCheckpointURL.lastPathComponent)")
+      let aio = try ZImageAIOCheckpoint.loadComponents(from: aioCheckpointURL, textEncoderPrefix: textEncoderPrefix, dtype: .bfloat16, logger: logger)
+
+      logger.info("Loading text encoder...")
+      let te = try loadTextEncoder(snapshot: snapshot, config: configs.textEncoder)
+      ZImageWeightsMapping.applyTextEncoder(weights: aio.textEncoder, to: te, manifest: nil, logger: logger)
+      textEncoder = te
+
+      progressHandler?(GenerationProgress(stage: .loadingTransformer, stepIndex: 0, totalSteps: 1))
+      logger.info("Loading transformer...")
+      let trans = try loadTransformer(snapshot: snapshot, config: configs.transformer)
+      var transformerWeights = canonicalizeTransformerOverride(aio.transformer, dim: configs.transformer.dim, logger: logger)
+      if let inferredDim = inferTransformerDim(from: transformerWeights), inferredDim != configs.transformer.dim {
+        throw PipelineError.weightsMissing("AIO transformer dim \(inferredDim) mismatches model dim \(configs.transformer.dim)")
+      }
+      ZImageWeightsMapping.applyTransformer(weights: transformerWeights, to: trans, manifest: nil, logger: logger)
+      transformer = trans
+
+      activeTransformerOverrideURL = nil
+      activeAIOCheckpointURL = aioCheckpointURL
+      quantManifest = nil
+
+      if vae == nil {
+        progressHandler?(GenerationProgress(stage: .loadingVAE, stepIndex: 0, totalSteps: 1))
+        logger.info("Loading VAE...")
+        let v = try loadVAEDecoder(snapshot: snapshot, config: configs.vae)
+        let decoderWeights = aio.vae.filter { $0.key.hasPrefix("decoder.") }
+        ZImageWeightsMapping.applyVAE(weights: decoderWeights, to: v, manifest: nil, logger: logger)
+        vae = v
+      } else {
+        logger.info("Reusing cached VAE")
+      }
     } else {
-      logger.info("Reusing cached VAE")
+      let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
+      let manifest = weightsMapper.loadQuantizationManifest()
+
+      if let m = manifest {
+        logger.info("Loading quantized model (bits=\(m.bits), group_size=\(m.groupSize))")
+      }
+      logger.info("Loading text encoder...")
+      let te = try loadTextEncoder(snapshot: snapshot, config: configs.textEncoder)
+      let textEncoderWeights = try weightsMapper.loadTextEncoder()
+      ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: te, manifest: manifest, logger: logger)
+      textEncoder = te
+      progressHandler?(GenerationProgress(stage: .loadingTransformer, stepIndex: 0, totalSteps: 1))
+      logger.info("Loading transformer...")
+      let trans = try loadTransformer(snapshot: snapshot, config: configs.transformer)
+      let transformerWeights = try weightsMapper.loadTransformer()
+      ZImageWeightsMapping.applyTransformer(weights: transformerWeights, to: trans, manifest: manifest, logger: logger)
+      transformer = trans
+      activeTransformerOverrideURL = nil
+      activeAIOCheckpointURL = nil
+      if vae == nil {
+        progressHandler?(GenerationProgress(stage: .loadingVAE, stepIndex: 0, totalSteps: 1))
+        logger.info("Loading VAE...")
+        let v = try loadVAEDecoder(snapshot: snapshot, config: configs.vae)
+        let vaeWeights = try weightsMapper.loadVAE()
+        let decoderWeights = vaeWeights.filter { $0.key.hasPrefix("decoder.") }
+        ZImageWeightsMapping.applyVAE(weights: decoderWeights, to: v, manifest: manifest, logger: logger)
+        vae = v
+      } else {
+        logger.info("Reusing cached VAE")
+      }
+
+      quantManifest = manifest
     }
 
     modelConfigs = configs
-    quantManifest = manifest
     modelSnapshot = snapshot
     isModelLoaded = true
     loadedModelId = modelId
@@ -444,11 +541,13 @@ public final class ZImagePipeline {
     if request.height % vaeScale != 0 {
       throw PipelineError.invalidDimensions("Height must be divisible by \(vaeScale) (got \(request.height)). Please adjust to a multiple of \(vaeScale).")
     }
-    let resolved = resolveModelSpecAndOverride(request.model)
-    let requestedModelId = resolved.baseModelSpec ?? ZImageRepository.id
-    if !isModelLoaded || loadedModelId != requestedModelId {
-      try await loadModel(modelSpec: resolved.baseModelSpec, progressHandler: progressHandler)
-    }
+    let selection = resolveModelSelection(request.model, forceTransformerOverrideOnly: request.forceTransformerOverrideOnly)
+    try await loadModel(
+      modelSpec: selection.baseModelSpec,
+      aioCheckpointURL: selection.aioCheckpointURL,
+      aioTextEncoderPrefix: selection.aioTextEncoderPrefix,
+      progressHandler: progressHandler
+    )
 
     guard let tokenizer = tokenizer,
           let textEncoder = textEncoder,
@@ -458,7 +557,9 @@ public final class ZImagePipeline {
       throw PipelineError.modelNotLoaded
     }
 
-    try applyTransformerOverrideIfNeeded(resolved.transformerOverrideURL)
+    if selection.aioCheckpointURL == nil {
+      try applyTransformerOverrideIfNeeded(selection.transformerOverrideURL)
+    }
 
     if let loraConfig = request.lora {
 

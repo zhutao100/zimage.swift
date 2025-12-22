@@ -3,16 +3,30 @@ import Logging
 
 enum PipelineSnapshot {
 
+  static let configAndTokenizerFilePatterns: [String] = [
+    ZImageFiles.modelIndex,
+    ZImageFiles.schedulerConfig,
+    ZImageFiles.transformerConfig,
+    ZImageFiles.textEncoderConfig,
+    ZImageFiles.vaeConfig,
+    "tokenizer/*",
+  ]
+
   static func prepare(
     model: String?,
     defaultModelId: String = ZImageRepository.id,
     defaultRevision: String = ZImageRepository.revision,
+    filePatterns: [String]? = nil,
     logger: Logger
   ) async throws -> URL {
+    let patterns = filePatterns ?? ["*.safetensors", "*.json", "tokenizer/*"]
+    let requireWeights = patterns.contains(where: { $0.localizedCaseInsensitiveContains("safetensors") })
     let resolvedURL = try await ModelResolution.resolveOrDefault(
       modelSpec: model,
       defaultModelId: defaultModelId,
       defaultRevision: defaultRevision,
+      filePatterns: patterns,
+      requireWeights: requireWeights,
       progressHandler: { [logger] progress in
         let completed = progress.completedUnitCount
         let total = progress.totalUnitCount

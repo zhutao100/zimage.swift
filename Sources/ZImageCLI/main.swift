@@ -51,6 +51,7 @@ struct ZImageCLI {
     var enhancePrompt = false
     var enhanceMaxTokens = 512
     var noProgress = false
+    var forceTransformerOverrideOnly = false
 
     let args = Array(CommandLine.arguments.dropFirst())
     var iterator = args.makeIterator()
@@ -75,6 +76,8 @@ struct ZImageCLI {
         outputPath = nextValue(for: arg, iterator: &iterator)
       case "--model", "-m":
         model = nextValue(for: arg, iterator: &iterator)
+      case "--force-transformer-override-only":
+        forceTransformerOverrideOnly = true
       case "--cache-limit":
         cacheLimit = intValue(for: arg, iterator: &iterator, minimum: 1, fallback: 2048)
       case "--max-sequence-length":
@@ -137,7 +140,8 @@ struct ZImageCLI {
       maxSequenceLength: maxSequenceLength,
       lora: loraConfig,
       enhancePrompt: enhancePrompt,
-      enhanceMaxTokens: enhanceMaxTokens
+      enhanceMaxTokens: enhanceMaxTokens,
+      forceTransformerOverrideOnly: forceTransformerOverrideOnly
     )
 
     let pipeline = ZImagePipeline(logger: logger)
@@ -184,6 +188,7 @@ struct ZImageCLI {
       --seed                 Random seed
       --output, -o           Output path (default z-image.png)
       --model, -m            Model path or HuggingFace ID (default: \(ZImageRepository.id))
+      --force-transformer-override-only  Treat a local .safetensors as transformer-only override (disable AIO auto-detect)
       --cache-limit          GPU memory cache limit in MB (default: unlimited)
       --max-sequence-length  Maximum sequence length for text encoding (default: 512)
       --lora, -l             LoRA weights path or HuggingFace ID
