@@ -9,6 +9,8 @@ Orchestrates the end-to-end image generation process. It ties together the Model
 - **Responsibility**: The high-level API for generation.
 - **Capabilities**:
   - **Model Management**: Handles loading/unloading of individual components to manage memory usage.
+  - **Memory Optimization**: Implements phase-scoped lifetimes. Text encoder is released immediately after embedding generation. Transformer is unloaded and cache cleared before VAE decoding to prevent memory spikes.
+  - **AIO Support**: Detects and loads single-file "All-In-One" checkpoints (Transformer + Text Encoder + VAE) via `ZImageAIOCheckpoint`, bypassing base model weight loading.
   - **LoRA Support**: Dynamically loads/unloads LoRA adapters into the Transformer.
   - **Transformer Overrides**: Allows swapping the base transformer weights with a fine-tuned checkpoint (safetensors) without reloading the rest of the model.
   - **Prompt Enhancement**: Invokes the `QwenTextEncoder`'s generation capability to rewrite prompts before diffusion.

@@ -33,7 +33,7 @@ xcodebuild test -scheme zimage.swift -destination 'platform=macOS' -enableCodeCo
 - `ZImageCLI`: Entry point for generation, controlnet, and quantization commands. Handles argument parsing and global GPU settings.
 
 **Pipeline Layer** (`Sources/ZImage/Pipeline`):
-- `ZImagePipeline`: Orchestrates Text-to-Image generation. Manages dynamic model loading/unloading, LoRA application, and the denoising loop.
+- `ZImagePipeline`: Orchestrates Text-to-Image generation. Manages dynamic model loading/unloading (phase-scoped lifetimes), LoRA application, and the denoising loop.
 - `ZImageControlPipeline`: Extends generation with ControlNet conditioning (image/mask inputs) and Inpainting.
 - `FlowMatchScheduler`: Implements Flow Matching Euler scheduler with "Dynamic Shifting" for resolution-dependent noise schedules.
 
@@ -45,7 +45,7 @@ xcodebuild test -scheme zimage.swift -destination 'platform=macOS' -enableCodeCo
 - **VAE**: `AutoencoderKL` for encoding/decoding images to/from latents. Supports `AutoencoderDecoderOnly` for inference optimization.
 
 **Infrastructure** (`Sources/ZImage/Weights`, `/Quantization`, `/LoRA`):
-- **Weights**: Handles downloading from Hugging Face (`HubSnapshot`) and parsing `.safetensors`.
+- **Weights**: Handles downloading from Hugging Face (`HubSnapshot`), parsing `.safetensors`, and detecting AIO checkpoints.
 - **Quantization**: `ZImageQuantizer` supports 4-bit and 8-bit group-wise quantization (Affine/MXFP4) for reduced memory footprint.
 - **LoRA**: `LoRAApplicator` supports both baked-in and dynamic (runtime) adapters, including LoKr (Kronecker product) and quantization compatibility.
 

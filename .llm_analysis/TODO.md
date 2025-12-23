@@ -38,5 +38,6 @@
 - [x] **ZImageCLI** (`Sources/ZImageCLI`)
 
 ## Phase 3: Synthesis
-- [ ] Compile `PROJECT_ARCHITECTURE.md`
-- [ ] Update `CLAUDE.md` Architecture section
+- [x] Compile `PROJECT_ARCHITECTURE.md`
+- [x] Update `CLAUDE.md` Architecture section
+- [x] Update `README.md` with recent changes

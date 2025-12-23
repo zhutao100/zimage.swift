@@ -3,7 +3,7 @@
 ## Executive Summary
 **ZImage.swift** is a high-performance, native Swift implementation of the "Z-Image-Turbo" text-to-image generation model, built on top of Apple's MLX framework. It is designed specifically for Apple Silicon (M-series chips), leveraging unified memory and the Neural Engine for efficient inference.
 
-The project implements a full Diffusion Transformer (DiT) pipeline, including a Qwen-based text encoder (which doubles as a prompt enhancer), a Variational Autoencoder (VAE) for latent space compression, and a Flow Matching scheduler. It features advanced capabilities such as ControlNet support (for guided generation), dynamic LoRA/LoKr adaptation, and model quantization (4-bit/8-bit) to run on consumer hardware with limited RAM.
+The project implements a full Diffusion Transformer (DiT) pipeline, including a Qwen-based text encoder (which doubles as a prompt enhancer), a Variational Autoencoder (VAE) for latent space compression, and a Flow Matching scheduler. It features advanced capabilities such as ControlNet support (for guided generation), dynamic LoRA/LoKr adaptation, model quantization (4-bit/8-bit), and memory-optimized execution (phase-scoped lifetimes) to run on consumer hardware with limited RAM.
 
 ## Technology Stack
 - **Language**: Swift 5.9+
@@ -21,7 +21,7 @@ The entry point for users. It parses command-line arguments and orchestrates the
 
 ### 2. Pipeline Layer (`Sources/ZImage/Pipeline`)
 The "brain" that coordinates models to produce an image.
-- **`ZImagePipeline`**: Standard Text-to-Image pipeline. Handles model loading, prompt encoding, latent initialization, denoising loop, and decoding.
+- **`ZImagePipeline`**: Standard Text-to-Image pipeline. Handles model loading, prompt encoding, latent initialization, denoising loop, and decoding. Implements **phase-scoped lifetimes**: unloads the Text Encoder after prompt processing and the Transformer before VAE decoding to minimize peak memory.
 - **`ZImageControlPipeline`**: Extends the standard pipeline to support ControlNet (conditioning via edge maps, depth maps, pose, etc.) and Inpainting.
 - **`FlowMatchEulerScheduler`**: Implements the Flow Matching Euler discrete scheduler with "dynamic shifting" for resolution-dependent noise scheduling.
 
@@ -37,7 +37,7 @@ Contains the neural network architectures.
 
 ### 4. Infrastructure Layer (`Sources/ZImage/Weights`, `/Quantization`, `/LoRA`)
 Handles the "heavy lifting" of model management.
-- **Weights**: Downloads models from Hugging Face (`HubSnapshot`), parses `.safetensors` files (`SafeTensorsReader`), and maps PyTorch keys to MLX parameter hierarchies (`ZImageWeightsMapper`).
+- **Weights**: Downloads models from Hugging Face (`HubSnapshot`), parses `.safetensors` files (`SafeTensorsReader`), and maps PyTorch keys to MLX parameter hierarchies (`ZImageWeightsMapper`). Supports **AIO Checkpoints** (`ZImageAIOCheckpoint`) to load Transformer, Text Encoder, and VAE from a single file.
 - **Quantization**: Compresses models to 4-bit/8-bit precision (`ZImageQuantizer`), enabling them to fit in RAM. Supports Group-wise quantization.
 - **LoRA**: Implements Low-Rank Adaptation (`LoRAApplicator`). Supports both "Baked-in" (merge weights) and "Dynamic" (runtime wrapper layers) application, including LoKr (Kronecker product) support.
 

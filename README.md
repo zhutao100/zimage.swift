@@ -12,19 +12,6 @@ Swift port of [Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) u
 
 ## Installation
 
-### Download Precompiled Binary
-
-Grab the latest signed ZImageCLI binary from the [releases page](https://github.com/mzbac/zimage.swift/releases). The asset is shipped as a zipped bundle:
-
-```bash
-curl -L https://github.com/mzbac/zimage.swift/releases/latest/download/zimage.macos.arm64.zip \
-  -o zimage.macos.arm64.zip
-unzip -o zimage.macos.arm64.zip -d z-image-cli
-cd z-image-cli
-chmod +x ZImageCLI
-./ZImageCLI -h
-```
-
 ### Building from Source
 
 ```bash
@@ -57,10 +44,24 @@ ZImageCLI -h
 | `-g, --guidance` | Guidance scale | 3.0 |
 | `--seed` | Random seed | random |
 | `-o, --output` | Output path | z-image.png |
-| `-m, --model` | Model path or HuggingFace ID | Tongyi-MAI/Z-Image-Turbo |
+| `-m, --model` | Model path (dir or .safetensors) or HuggingFace ID | Tongyi-MAI/Z-Image-Turbo |
+| `--force-transformer-override-only` | Treat local .safetensors as transformer-only (disable AIO detection) | false |
 | `--cache-limit` | GPU memory cache limit in MB | unlimited |
 | `-l, --lora` | LoRA weights path or HuggingFace ID | - |
 | `--lora-scale` | LoRA scale factor | 1.0 |
+| `-e, --enhance` | Enhance prompt using LLM | false |
+| `--enhance-max-tokens` | Max tokens for prompt enhancement | 512 |
+| `--no-progress` | Disable progress output | false |
+
+## AIO Checkpoint Usage
+
+You can load a single `.safetensors` file containing the Transformer, Text Encoder, and VAE (AIO) directly:
+
+```bash
+ZImageCLI -p "a cozy cabin" -m path/to/z_image_turbo_aio.safetensors
+```
+
+If the file is detected as an AIO checkpoint, it will skip loading base model weights and use the components from the file. To force it to be treated as a transformer-only override (overlaying base weights), use `--force-transformer-override-only`.
 
 ## Examples
 
@@ -123,8 +124,11 @@ ZImageCLI control \
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-p, --prompt` | Text prompt (required) | - |
-| `-c, --control-image` | Control image path (required) | - |
+| `-c, --control-image` | Control image path (Canny/HED/Pose/Depth/MLSD) | - |
+| `-i, --inpaint-image` | Source image for inpainting | - |
+| `--mask, --mask-image` | Mask image for inpainting | - |
 | `--cw, --controlnet-weights` | ControlNet weights path or HuggingFace ID (required) | - |
+| `--cf, --control-file` | Specific .safetensors file within weights directory | - |
 | `--cs, --control-scale` | Control context scale | 0.75 |
 | `-W, --width` | Output width | 1024 |
 | `-H, --height` | Output height | 1024 |
@@ -133,6 +137,7 @@ ZImageCLI control \
 | `--seed` | Random seed | random |
 | `-o, --output` | Output path | z-image-control.png |
 | `-m, --model` | Model path or HuggingFace ID | Tongyi-MAI/Z-Image-Turbo |
+| `--cache-limit` | GPU memory cache limit in MB | unlimited |
 
 ### ControlNet Examples
 
