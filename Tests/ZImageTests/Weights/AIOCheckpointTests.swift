@@ -14,6 +14,9 @@ final class AIOCheckpointTests: XCTestCase {
       "model.diffusion_model.cap_embedder.0.weight": MLXArray([Float(0.0)], [1]).asType(.bfloat16),
       "text_encoders.qwen3_4b.transformer.model.embed_tokens.weight": MLXArray([Float(0.0)], [1, 1]).asType(.bfloat16),
       "vae.decoder.conv_in.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
+      "vae.decoder.conv_out.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
+      "vae.decoder.mid.block_1.conv1.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
+      "vae.decoder.up.0.block.0.conv1.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
     ]
     try MLX.save(arrays: arrays, metadata: [:], url: fileURL)
 
@@ -30,6 +33,9 @@ final class AIOCheckpointTests: XCTestCase {
     let arrays: [String: MLXArray] = [
       "model.diffusion_model.cap_embedder.0.weight": MLXArray([Float(0.0)], [1]).asType(.bfloat16),
       "vae.decoder.conv_in.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
+      "vae.decoder.conv_out.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
+      "vae.decoder.mid.block_1.conv1.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
+      "vae.decoder.up.0.block.0.conv1.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
     ]
     try MLX.save(arrays: arrays, metadata: [:], url: fileURL)
 
@@ -47,6 +53,9 @@ final class AIOCheckpointTests: XCTestCase {
       "model.diffusion_model.cap_embedder.0.weight": MLXArray([Float(0.0)], [1]).asType(.bfloat16),
       "text_encoders.qwen3_4b.transformer.model.embed_tokens.weight": MLXArray([Float(0.0)], [1, 1]).asType(.bfloat16),
       "vae.decoder.conv_in.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
+      "vae.decoder.conv_out.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
+      "vae.decoder.mid.block_1.conv1.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
+      "vae.decoder.up.0.block.0.conv1.weight": MLXArray([Float(0.0)], [1, 1, 1, 1]).asType(.bfloat16),
     ]
     try MLX.save(arrays: arrays, metadata: [:], url: fileURL)
 
@@ -61,4 +70,3 @@ final class AIOCheckpointTests: XCTestCase {
     XCTAssertNil(forced.aioCheckpointURL)
   }
 }
-

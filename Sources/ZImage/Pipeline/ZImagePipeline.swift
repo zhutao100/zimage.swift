@@ -183,6 +183,36 @@ public final class ZImagePipeline {
     return ZImageTransformer2DModel(configuration: config)
   }
 
+  private func auditModuleWeightShapeMismatches(
+    module: Module,
+    weights: [String: MLXArray],
+    transpose4DTensors: Bool,
+    logger: Logger,
+    sample: Int = 10
+  ) -> [String] {
+    let params = module.parameters().flattened()
+    var mismatches: [String] = []
+    mismatches.reserveCapacity(8)
+
+    for (key, param) in params {
+      guard var tensor = weights[key] else { continue }
+      if transpose4DTensors && tensor.ndim == 4 {
+        tensor = tensor.transposed(0, 2, 3, 1)
+      }
+      if tensor.shape != param.shape {
+        mismatches.append("\(key) expected \(param.shape) got \(tensor.shape)")
+      }
+    }
+
+    if !mismatches.isEmpty {
+      let sampleList = mismatches.prefix(max(0, sample)).joined(separator: "; ")
+      let suffix = mismatches.count > sample ? "; ..." : ""
+      logger.warning("Found \(mismatches.count) weight shape mismatches (sample: \(sampleList)\(suffix))")
+    }
+
+    return mismatches
+  }
+
   private func loadVAEDecoder(snapshot: URL, config: ZImageVAEConfig) throws -> AutoencoderDecoderOnly {
     AutoencoderDecoderOnly(configuration: .init(
       inChannels: config.inChannels,
@@ -425,8 +455,45 @@ public final class ZImagePipeline {
         progressHandler?(GenerationProgress(stage: .loadingVAE, stepIndex: 0, totalSteps: 1))
         logger.info("Loading VAE...")
         let v = try loadVAEDecoder(snapshot: snapshot, config: configs.vae)
-        let decoderWeights = aio.vae.filter { $0.key.hasPrefix("decoder.") }
-        ZImageWeightsMapping.applyVAE(weights: decoderWeights, to: v, manifest: nil, logger: logger)
+        let rawDecoderWeights = aio.vae.filter { $0.key.hasPrefix("decoder.") }
+        let decoderWeights = ZImageAIOCheckpoint.canonicalizeVAEWeights(
+          rawDecoderWeights,
+          expectedUpBlocks: configs.vae.blockOutChannels.count,
+          logger: logger
+        )
+
+        let audit = WeightsAudit.audit(module: v, weights: decoderWeights, logger: logger, sample: 10)
+        let total = audit.matched + audit.missing.count
+        let coverage = total > 0 ? Double(audit.matched) / Double(total) : 0.0
+        let minimumCoverage = 0.99
+        let mismatches = auditModuleWeightShapeMismatches(
+          module: v,
+          weights: decoderWeights,
+          transpose4DTensors: true,
+          logger: logger,
+          sample: 10
+        )
+
+        if coverage >= minimumCoverage, mismatches.isEmpty {
+          ZImageWeightsMapping.applyVAE(weights: decoderWeights, to: v, manifest: nil, logger: logger)
+        } else {
+          let percent = Int((coverage * 100.0).rounded())
+          if mismatches.isEmpty {
+            logger.warning("AIO VAE decoder weights coverage too low: matched \(audit.matched)/\(total) (\(percent)%). Falling back to base VAE weights.")
+          } else {
+            logger.warning("AIO VAE decoder weights have incompatible shapes (coverage \(percent)%), falling back to base VAE weights.")
+          }
+
+          let baseVAESnapshot = try await PipelineSnapshot.prepare(
+            model: modelSpec,
+            filePatterns: PipelineSnapshot.vaeOnlyFilePatterns,
+            logger: logger
+          )
+          let weightsMapper = ZImageWeightsMapper(snapshot: baseVAESnapshot, logger: logger)
+          let baseVAEWeights = try weightsMapper.loadVAE()
+          let baseDecoderWeights = baseVAEWeights.filter { $0.key.hasPrefix("decoder.") }
+          ZImageWeightsMapping.applyVAE(weights: baseDecoderWeights, to: v, manifest: nil, logger: logger)
+        }
         vae = v
       } else {
         logger.info("Reusing cached VAE")

@@ -12,6 +12,12 @@ enum PipelineSnapshot {
     "tokenizer/*",
   ]
 
+  static let vaeOnlyFilePatterns: [String] = [
+    ZImageFiles.modelIndex,
+    ZImageFiles.vaeConfig,
+    "vae/*.safetensors",
+  ]
+
   static func prepare(
     model: String?,
     defaultModelId: String = ZImageRepository.id,
