@@ -7,6 +7,7 @@ import Foundation
 final class CLIEndToEndTests: XCTestCase {
 
   private var cliPath: String?
+  private static let cliDependencyTimestamp: Date = newestCLIDependencyTimestamp()
 
   /// Project root directory (derived from test file location)
   private static let projectRoot: URL = {
@@ -279,13 +280,10 @@ final class CLIEndToEndTests: XCTestCase {
 
     // Check if CLI already exists in local build folder
     let releasePath = buildDir.appendingPathComponent("Build/Products/Release/ZImageCLI")
-    if FileManager.default.fileExists(atPath: releasePath.path) {
-      return releasePath.path
-    }
-
     let debugPath = buildDir.appendingPathComponent("Build/Products/Debug/ZImageCLI")
-    if FileManager.default.fileExists(atPath: debugPath.path) {
-      return debugPath.path
+    if let existing = [releasePath, debugPath].first(where: { FileManager.default.fileExists(atPath: $0.path) }),
+       Self.isCLIBinaryUpToDate(existing) {
+      return existing.path
     }
 
     // Try to build with xcodebuild to local build folder (proper Metal library bundling)
@@ -311,6 +309,9 @@ final class CLIEndToEndTests: XCTestCase {
       // Check for the built CLI
       if FileManager.default.fileExists(atPath: releasePath.path) {
         return releasePath.path
+      }
+      if FileManager.default.fileExists(atPath: debugPath.path) {
+        return debugPath.path
       }
     }
 
@@ -389,5 +390,40 @@ final class CLIEndToEndTests: XCTestCase {
     case cliNotBuilt
     case timeout
     case executionFailed(String)
+  }
+
+  private static func isCLIBinaryUpToDate(_ url: URL) -> Bool {
+    guard let binaryDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else {
+      return false
+    }
+    return binaryDate >= cliDependencyTimestamp
+  }
+
+  private static func newestCLIDependencyTimestamp() -> Date {
+    let fm = FileManager.default
+    var newest = Date.distantPast
+
+    func consider(_ url: URL) {
+      guard let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else { return }
+      if date > newest { newest = date }
+    }
+
+    consider(projectRoot.appendingPathComponent("Package.swift"))
+    consider(projectRoot.appendingPathComponent("Package.resolved"))
+
+    let sourcesDir = projectRoot.appendingPathComponent("Sources")
+    if let enumerator = fm.enumerator(
+      at: sourcesDir,
+      includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+      options: [.skipsHiddenFiles]
+    ) {
+      for case let fileURL as URL in enumerator {
+        let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
+        guard values?.isRegularFile == true, let date = values?.contentModificationDate else { continue }
+        if date > newest { newest = date }
+      }
+    }
+
+    return newest
   }
 }
