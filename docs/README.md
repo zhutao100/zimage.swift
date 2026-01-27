@@ -9,7 +9,7 @@ If you’re new here, start with the root `README.md` for a runnable quickstart.
 1. [`docs/CLI.md`](CLI.md) — build + run the CLI, examples, flags, and subcommands.
 2. [`docs/MODELS_AND_WEIGHTS.md`](MODELS_AND_WEIGHTS.md) — how model specs, caches, quantization, overrides, and AIO checkpoints work.
 3. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — code-level architecture and “where to look”.
-4. [`docs/z-image-turbo.md`](z-image-turbo.md) — upstream model layout notes (Diffusers/HF reference).
+4. [`docs/z-image-turbo.md`](z-image-turbo.md), [`docs/z-image.md`](z-image.md)— upstream model layout notes (Diffusers/HF reference).
 5. [`docs/dev_plans/ROADMAP.md`](dev_plans/ROADMAP.md) — prioritized next steps.
 
 ## “Source Of Truth” Pointers
