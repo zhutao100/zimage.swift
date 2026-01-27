@@ -77,3 +77,4 @@ Use it when validating weight naming/mapping, scheduler behavior, or architectur
   - If missing: `curl https://gist.githubusercontent.com/zhutao100/cc481d2cd248aa8769e1abb3887facc8/raw/89d644c490bcf5386cb81ebcc36c92471f578c60/stls.py > ~/bin/stls.py`
 - Default model snapshot cache (common location):
   - `~/.cache/huggingface/hub/models--Tongyi-MAI--Z-Image-Turbo/snapshots`
+  - `~/.cache/huggingface/hub/models--Tongyi-MAI--Z-Image/snapshots`
