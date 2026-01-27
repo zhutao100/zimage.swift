@@ -1,5 +1,7 @@
 # Code Quality Analysis Report: zimage.swift
 
+> Historical note: this document is a snapshot-style analysis (generated on 2025-12-24). Treat it as context and ideas, not as a source of truth.
+
 ## Executive Summary
 
 `zimage.swift` is a high-performance, native Swift implementation of the Z-Image-Turbo text-to-image model, built on the MLX framework. The codebase is generally well-structured, idiomatic, and demonstrates a deep understanding of both the underlying model architecture and the MLX framework.

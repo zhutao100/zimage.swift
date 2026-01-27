@@ -1,5 +1,7 @@
 # `Tongyi-MAI/Z-Image-Turbo`
 
+This document is a **reference for the upstream model repository layout** (Hugging Face / Diffusers concepts). For how **Z-Image.swift** resolves and loads model weights (local paths, HF cache, quantization, AIO checkpoints), start with `docs/MODELS_AND_WEIGHTS.md`.
+
 
 **Top-level files and folders** (authoritative list from the Hub API):
 `assets/`, `model_index.json`, `scheduler/`, `text_encoder/`, `tokenizer/`, `transformer/`, `vae/`, `README.md`, `.gitattributes`. [Hugging Face](https://huggingface.co/api/models/Tongyi-MAI/Z-Image-Turbo)
