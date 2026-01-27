@@ -1,0 +1,3 @@
+--exclude Pods,Carthage,.build,DerivedData
+--indent 2
+--ifdef noIndent

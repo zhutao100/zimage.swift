@@ -1,0 +1,43 @@
+minimum_pre_commit_version: "3.2.0"
+
+repos:
+  # Basic hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+
+  # SwiftLint (uses .swiftlint.yml automatically if present)
+  - repo: https://github.com/realm/SwiftLint
+    rev: 0.63.2
+    hooks:
+      - id: swiftlint
+        files: \.swift$
+
+  # SwiftFormat (run locally-installed swiftformat; see install step below)
+  - repo: local
+    hooks:
+      - id: swiftformat-lint
+        name: SwiftFormat (lint)
+        entry: swiftformat --lint --config .swiftformat
+        language: system
+        files: \.swift$
+
+      # Optional: manual formatter (won't run on every commit; you run it explicitly)
+      - id: swiftformat-fix
+        name: SwiftFormat (apply)
+        entry: swiftformat --config .swiftformat
+        language: system
+        files: \.swift$
+        stages: [manual]
+
+  # Secrets scanning (fast, no baseline)
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks

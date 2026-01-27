@@ -1,0 +1,17 @@
+excluded:
+  - Pods
+  - Carthage
+  - .build
+  - DerivedData
+
+line_length:
+  warning: 140
+  error: 200
+
+disabled_rules:
+  - identifier_name
+  - type_body_length
+
+function_body_length:
+  warning: 300
+  error: 400
