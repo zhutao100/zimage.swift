@@ -1,0 +1,7 @@
+{
+  "weight_map": {
+    "model.diffusion_model.layers.0.weight": "diffusion_pytorch_model-00001-of-00003.safetensors",
+    "model.diffusion_model.layers.1.weight": "diffusion_pytorch_model-00002-of-00003.safetensors",
+    "model.diffusion_model.layers.2.weight": "diffusion_pytorch_model-00003-of-00003.safetensors"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "in_channels": 16,
+  "dim": 4096,
+  "n_layers": 32,
+  "n_refiner_layers": 2,
+  "n_heads": 32,
+  "n_kv_heads": 32,
+  "norm_eps": 1e-6,
+  "qk_norm": true,
+  "cap_feat_dim": 3072,
+  "rope_theta": 256.0,
+  "t_scale": 1000.0,
+  "axes_dims": [32, 48, 48],
+  "axes_lens": [1, 128, 128]
+}

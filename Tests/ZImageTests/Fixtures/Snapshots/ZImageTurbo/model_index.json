@@ -1,0 +1,5 @@
+{
+  "_class_name": "ZImagePipeline",
+  "_diffusers_version": "0.0.0-test-fixture",
+  "model_type": "z-image-turbo"
+}
