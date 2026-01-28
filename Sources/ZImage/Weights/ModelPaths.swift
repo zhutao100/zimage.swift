@@ -3,11 +3,35 @@ import Foundation
 /// Canonical locations for the Hugging Face snapshot. Kept small and explicit
 /// so the rest of the pipeline can assemble download/caching steps.
 public enum ZImageRepository {
-  public static let id = "Tongyi-MAI/Z-Image-Turbo"
+  public static let id = ZImageKnownModel.zImageTurbo.id
   public static let revision = "main"
 
   public static func defaultCacheDirectory(base: URL = URL(fileURLWithPath: "models")) -> URL {
-    base.appendingPathComponent("z-image-turbo")
+    defaultCacheDirectory(for: id, base: base)
+  }
+
+  public static func defaultCacheDirectory(for modelId: String, base: URL = URL(fileURLWithPath: "models")) -> URL {
+    switch ZImageModelRegistry.normalizedModelId(from: modelId) {
+    case ZImageKnownModel.zImage.id:
+      return base.appendingPathComponent("z-image")
+    case ZImageKnownModel.zImageTurbo.id, ZImageKnownModel.zImageTurbo8bit.id, "mzbac/Z-Image-Turbo-8bit":
+      return base.appendingPathComponent("z-image-turbo")
+    default:
+      return base.appendingPathComponent(sanitizeModelIdForCachePath(modelId))
+    }
+  }
+
+  private static func sanitizeModelIdForCachePath(_ modelId: String) -> String {
+    let normalized = ZImageModelRegistry.normalizedModelId(from: modelId)
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+
+    let replaced = normalized
+      .replacingOccurrences(of: "/", with: "--")
+      .unicodeScalars
+      .map { allowed.contains($0) ? Character($0) : Character("-") }
+    let cleaned = String(replaced).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+
+    return cleaned.isEmpty ? "model" : cleaned.lowercased()
   }
 }
 
@@ -19,7 +43,7 @@ public enum ZImageFiles {
   public static let transformerWeights = [
     "transformer/diffusion_pytorch_model-00001-of-00003.safetensors",
     "transformer/diffusion_pytorch_model-00002-of-00003.safetensors",
-    "transformer/diffusion_pytorch_model-00003-of-00003.safetensors"
+    "transformer/diffusion_pytorch_model-00003-of-00003.safetensors",
   ]
   public static let transformerIndex = "transformer/diffusion_pytorch_model.safetensors.index.json"
 
@@ -28,7 +52,7 @@ public enum ZImageFiles {
   public static let textEncoderWeights = [
     "text_encoder/model-00001-of-00003.safetensors",
     "text_encoder/model-00002-of-00003.safetensors",
-    "text_encoder/model-00003-of-00003.safetensors"
+    "text_encoder/model-00003-of-00003.safetensors",
   ]
   public static let textEncoderIndex = "text_encoder/model.safetensors.index.json"
 
@@ -36,7 +60,7 @@ public enum ZImageFiles {
     "tokenizer/merges.txt",
     "tokenizer/tokenizer.json",
     "tokenizer/tokenizer_config.json",
-    "tokenizer/vocab.json"
+    "tokenizer/vocab.json",
   ]
 
   public static let vaeConfig = "vae/config.json"
@@ -88,7 +112,8 @@ public enum ZImageFiles {
     if fm.fileExists(atPath: indexURL.path),
        let data = try? Data(contentsOf: indexURL),
        let idx = try? JSONDecoder().decode(SafetensorsIndex.self, from: data),
-       let weightMap = idx.weight_map {
+       let weightMap = idx.weight_map
+    {
       let uniqueFiles = Array(Set(weightMap.values))
       let relative = uniqueFiles
         .map { file in file.contains("/") ? file : "\(componentDir)/\(file)" }
@@ -140,7 +165,7 @@ public enum ZImageFiles {
       guard let ofRange = name.range(of: "-of-") else { return nil }
       if let lastDash = name[..<ofRange.lowerBound].lastIndex(of: "-") {
         let start = name.index(after: lastDash)
-        let idxStr = String(name[start..<ofRange.lowerBound])
+        let idxStr = String(name[start ..< ofRange.lowerBound])
         return Int(idxStr)
       }
       return nil

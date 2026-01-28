@@ -1,11 +1,13 @@
+// swiftlint:disable file_length
+
+import Dispatch
 import Foundation
+import Hub
 import Logging
 import MLX
 import MLXNN
 import MLXRandom
 import Tokenizers
-import Hub
-import Dispatch
 #if canImport(CoreGraphics)
 import CoreGraphics
 import ImageIO
@@ -24,6 +26,7 @@ public struct ControlProgress: Sendable {
     self.enhancedPrompt = enhancedPrompt
   }
 }
+
 public typealias ControlProgressCallback = @Sendable (ControlProgress) -> Void
 public struct ZImageControlGenerationRequest {
   public var prompt: String
@@ -98,6 +101,7 @@ public struct ZImageControlGenerationRequest {
     self.enhancePrompt = enhancePrompt
     self.enhanceMaxTokens = enhanceMaxTokens
   }
+
   #if canImport(CoreGraphics)
   public init(
     prompt: String,
@@ -122,11 +126,11 @@ public struct ZImageControlGenerationRequest {
   ) {
     self.prompt = prompt
     self.negativePrompt = negativePrompt
-    self.controlImage = nil
+    controlImage = nil
     self.controlImageCG = controlImageCG
-    self.inpaintImage = nil
+    inpaintImage = nil
     self.inpaintImageCG = inpaintImageCG
-    self.maskImage = nil
+    maskImage = nil
     self.maskImageCG = maskImageCG
     self.controlContextScale = controlContextScale
     self.width = width
@@ -134,7 +138,7 @@ public struct ZImageControlGenerationRequest {
     self.steps = steps
     self.guidanceScale = guidanceScale
     self.seed = seed
-    self.outputPath = nil
+    outputPath = nil
     self.model = model
     self.controlnetWeights = controlnetWeights
     self.controlnetWeightsFile = controlnetWeightsFile
@@ -146,6 +150,7 @@ public struct ZImageControlGenerationRequest {
   }
   #endif
 }
+
 public class ZImageControlPipeline {
   public enum PipelineError: Error {
     case notImplemented
@@ -158,6 +163,7 @@ public class ZImageControlPipeline {
     case controlImageLoadFailed(String)
     case outputPathRequired
   }
+
   private var logger: Logger
   private let hubApi: HubApi
   private var tokenizer: QwenTokenizer?
@@ -181,13 +187,15 @@ public class ZImageControlPipeline {
     let enhanceMaxTokens: Int
     let enhancedPrompt: String?
   }
+
   private var cachedPromptEmbedding: CachedPromptEmbedding?
   public init(logger: Logger = Logger(label: "z-image.control-pipeline"), hubApi: HubApi = .shared) {
     self.logger = logger
     self.hubApi = hubApi
   }
+
   private func clearControlnetWeights() {
-    guard let transformer = self.transformer else { return }
+    guard let transformer = transformer else { return }
     logger.info("Clearing controlnet weights to free GPU memory...")
     for (key, linear) in transformer.controlAllXEmbedder {
       let zeroWeight = MLXArray.zeros(like: linear.weight)
@@ -206,6 +214,7 @@ public class ZImageControlPipeline {
     GPU.clearCache()
     logger.info("Controlnet weights cleared")
   }
+
   private func zeroOutTransformerBlock(_ block: ZImageTransformerBlock) {
     block.attention.toQ.weight._updateInternal(MLXArray.zeros(like: block.attention.toQ.weight))
     block.attention.toK.weight._updateInternal(MLXArray.zeros(like: block.attention.toK.weight))
@@ -236,6 +245,7 @@ public class ZImageControlPipeline {
     block.feedForward.w2.weight._updateInternal(MLXArray.zeros(like: block.feedForward.w2.weight))
     block.feedForward.w3.weight._updateInternal(MLXArray.zeros(like: block.feedForward.w3.weight))
   }
+
   private func zeroOutControlTransformerBlock(_ block: ZImageControlTransformerBlock) {
     block.attention.toQ.weight._updateInternal(MLXArray.zeros(like: block.attention.toQ.weight))
     block.attention.toK.weight._updateInternal(MLXArray.zeros(like: block.attention.toK.weight))
@@ -276,11 +286,13 @@ public class ZImageControlPipeline {
       block.afterProj.bias?._updateInternal(MLXArray.zeros(like: bias))
     }
   }
+
   private func loadTokenizer(snapshot: URL) throws -> QwenTokenizer {
     let tokDir = snapshot.appending(path: "tokenizer")
     return try QwenTokenizer.load(from: tokDir, hubApi: hubApi)
   }
-  private func loadTextEncoder(snapshot: URL, config: ZImageTextEncoderConfig) throws -> QwenTextEncoder {
+
+  private func loadTextEncoder(snapshot _: URL, config: ZImageTextEncoderConfig) throws -> QwenTextEncoder {
     return QwenTextEncoder(
       configuration: .init(
         vocabSize: config.vocabSize,
@@ -296,7 +308,8 @@ public class ZImageControlPipeline {
       )
     )
   }
-  private func loadControlTransformer(snapshot: URL, config: ZImageTransformerConfig) throws -> ZImageControlTransformer2DModel {
+
+  private func loadControlTransformer(snapshot _: URL, config: ZImageTransformerConfig) throws -> ZImageControlTransformer2DModel {
     let controlConfig = ZImageControlTransformerConfig(
       inChannels: config.inChannels,
       dim: config.dim,
@@ -314,7 +327,8 @@ public class ZImageControlPipeline {
     )
     return ZImageControlTransformer2DModel(configuration: controlConfig)
   }
-  private func loadVAE(snapshot: URL, config: ZImageVAEConfig) throws -> AutoencoderKL {
+
+  private func loadVAE(snapshot _: URL, config: ZImageVAEConfig) throws -> AutoencoderKL {
     return AutoencoderKL(configuration: .init(
       inChannels: config.inChannels,
       outChannels: config.outChannels,
@@ -328,6 +342,7 @@ public class ZImageControlPipeline {
       midBlockAddAttention: config.midBlockAddAttention
     ))
   }
+
   private func encodePrompt(_ prompt: String, tokenizer: QwenTokenizer, textEncoder: QwenTextEncoder, maxLength: Int) throws -> (MLXArray, MLXArray) {
     do {
       let result = try PipelineUtilities.encodePrompt(prompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: maxLength)
@@ -336,6 +351,7 @@ public class ZImageControlPipeline {
       throw PipelineError.textEncoderNotLoaded
     }
   }
+
   private func loadControlImage(
     url: URL,
     vae: AutoencoderKL,
@@ -345,7 +361,8 @@ public class ZImageControlPipeline {
   ) throws -> MLXArray {
     #if canImport(CoreGraphics)
     guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
-          let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+          let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil)
+    else {
       throw PipelineError.controlImageLoadFailed("Failed to load image from \(url.path)")
     }
     return try loadControlImage(
@@ -359,14 +376,17 @@ public class ZImageControlPipeline {
     throw PipelineError.controlImageLoadFailed("CoreGraphics not available on this platform")
     #endif
   }
+
   #if canImport(CoreGraphics)
   private func loadCGImage(from url: URL) -> CGImage? {
     guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
-          let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+          let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil)
+    else {
       return nil
     }
     return cgImage
   }
+
   private func encodeImageToLatents(
     cgImage: CGImage,
     vae: AutoencoderKL,
@@ -384,10 +404,11 @@ public class ZImageControlPipeline {
     let normalized = QwenImageIO.normalizeForEncoder(imageArray)
     let encodedLatents = vae.encode(normalized)
     let latentChannels = vaeConfig.latentChannels
-    let latents = encodedLatents[0..., 0..<latentChannels, 0..., 0...]
+    let latents = encodedLatents[0..., 0 ..< latentChannels, 0..., 0...]
     let normalizedLatents = (latents - vaeConfig.shiftFactor) * vaeConfig.scalingFactor
     return normalizedLatents
   }
+
   private func convertToRGBA(_ image: CGImage) -> CGImage? {
     let width = image.width
     let height = image.height
@@ -407,6 +428,7 @@ public class ZImageControlPipeline {
     context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
     return context.makeImage()
   }
+
   private func processMaskToLatent(
     cgImage: CGImage,
     latentH: Int,
@@ -430,6 +452,7 @@ public class ZImageControlPipeline {
     let binarized = MLX.where(grayscale .>= 0.5, MLXArray(Float(1.0)), MLXArray(Float(0.0)))
     return binarized
   }
+
   private func buildControlContext(
     controlImage: CGImage?,
     inpaintImage: CGImage?,
@@ -497,7 +520,7 @@ public class ZImageControlPipeline {
       let scaleFactor = MLXArray(vaeConfig.scalingFactor)
       let latentChannels = vaeConfig.latentChannels
       let encoded = vae.encode(maskedNormalized)
-      let latents = encoded[0..., 0..<latentChannels, 0..., 0...]
+      let latents = encoded[0..., 0 ..< latentChannels, 0..., 0...]
       inpaintLatents = (latents - shiftFactor) * scaleFactor
     } else {
       inpaintLatents = MLXArray.zeros([1, 16, latentH, latentW])
@@ -517,6 +540,7 @@ public class ZImageControlPipeline {
     let controlContext = MLX.expandedDimensions(combined, axis: 2)
     return controlContext
   }
+
   private func loadControlImage(
     cgImage: CGImage,
     vae: AutoencoderKL,
@@ -536,7 +560,7 @@ public class ZImageControlPipeline {
   }
   #endif
   private func applyLoRAIfNeeded(_ requestedConfig: LoRAConfiguration?) async throws {
-    guard let transformer = self.transformer else {
+    guard let transformer = transformer else {
       throw PipelineError.transformerNotLoaded
     }
     if let currentConfig = currentLoRAConfig, let requestedConfig = requestedConfig, currentConfig == requestedConfig {
@@ -562,8 +586,9 @@ public class ZImageControlPipeline {
       logger.info("LoRA applied successfully with scale=\(config.scale)")
     }
   }
+
   public func unloadLoRA() {
-    guard let transformer = self.transformer else { return }
+    guard let transformer = transformer else { return }
     if currentLoRA != nil {
       if let lora = currentLoRA, let config = currentLoRAConfig, lora.hasLoKr {
         LoRAApplicator.removeLoKr(from: transformer, loraWeights: lora, scale: config.scale, logger: logger)
@@ -575,6 +600,7 @@ public class ZImageControlPipeline {
       logger.info("LoRA unloaded")
     }
   }
+
   public func unloadTransformer() {
     transformer = nil
     currentLoRA = nil
@@ -583,6 +609,7 @@ public class ZImageControlPipeline {
     GPU.clearCache()
     logger.info("Transformer unloaded for memory optimization")
   }
+
   private func getAvailableMemory() -> UInt64 {
     var stats = vm_statistics64()
     var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
@@ -595,12 +622,16 @@ public class ZImageControlPipeline {
     let pageSize = UInt64(sysconf(_SC_PAGESIZE))
     return UInt64(stats.free_count) * pageSize
   }
+
   public var hasLoRALoaded: Bool {
     return currentLoRA != nil
   }
+
   public var loadedLoRAConfig: LoRAConfiguration? {
     return currentLoRAConfig
   }
+
+  // swiftlint:disable:next cyclomatic_complexity
   public func generate(_ request: ZImageControlGenerationRequest) async throws -> URL {
     logger.info("Requested Z-Image control generation")
     let requestedModelId = request.model ?? ZImageRepository.id
@@ -608,18 +639,34 @@ public class ZImageControlPipeline {
     let needsModelReload = (loadedModelId != requestedModelId)
     let needsControlnetReload = (loadedControlnetWeightsId != requestedControlnetId)
     if needsModelReload {
+      let canPreserveSharedComponents = loadedModelId != nil
+        && loadedModelId != requestedModelId
+        && ZImageModelRegistry.areZImageVariants(loadedModelId ?? "", requestedModelId)
+      if canPreserveSharedComponents {
+        logger.info("Switching Z-Image variant, preserving VAE and tokenizer")
+        textEncoder = nil
+        self.transformer = nil
+        self.modelConfigs = nil
+        self.quantManifest = nil
+        self.snapshot = nil
+        currentLoRA = nil
+        currentLoRAConfig = nil
+        cachedPromptEmbedding = nil
+        GPU.clearCache()
+      } else {
+        self.tokenizer = nil
+        textEncoder = nil
+        self.vae = nil
+        self.transformer = nil
+        self.modelConfigs = nil
+        self.quantManifest = nil
+        self.snapshot = nil
+        currentLoRA = nil
+        currentLoRAConfig = nil
+        cachedPromptEmbedding = nil
+        GPU.clearCache()
+      }
       logger.info("Loading model \(requestedModelId)...")
-      self.tokenizer = nil
-      self.textEncoder = nil
-      self.vae = nil
-      self.transformer = nil
-      self.modelConfigs = nil
-      self.quantManifest = nil
-      self.snapshot = nil
-      self.currentLoRA = nil
-      self.currentLoRAConfig = nil
-      self.cachedPromptEmbedding = nil
-      GPU.clearCache()
       let snapshot = try await PipelineSnapshot.prepare(model: request.model, logger: logger)
       let modelConfigs = try ZImageModelConfigs.load(from: snapshot)
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
@@ -630,13 +677,22 @@ public class ZImageControlPipeline {
       self.snapshot = snapshot
       self.modelConfigs = modelConfigs
       self.quantManifest = quantManifest
-      logger.info("Loading tokenizer...")
-      self.tokenizer = try loadTokenizer(snapshot: snapshot)
-      logger.info("Loading VAE...")
-      let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
-      let vaeWeights = try weightsMapper.loadVAE()
-      ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
-      self.vae = vae
+      if self.tokenizer == nil {
+        logger.info("Loading tokenizer...")
+        self.tokenizer = try loadTokenizer(snapshot: snapshot)
+      } else {
+        logger.info("Reusing cached tokenizer")
+      }
+
+      if self.vae == nil {
+        logger.info("Loading VAE...")
+        let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
+        let vaeWeights = try weightsMapper.loadVAE()
+        ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
+        self.vae = vae
+      } else {
+        logger.info("Reusing cached VAE")
+      }
       logger.info("Loading control transformer...")
       let transformer = try loadControlTransformer(snapshot: snapshot, config: modelConfigs.transformer)
       let transformerWeights = try weightsMapper.loadTransformer()
@@ -647,12 +703,13 @@ public class ZImageControlPipeline {
         logger: logger
       )
       self.transformer = transformer
-      self.loadedModelId = requestedModelId
-      self.loadedControlnetWeightsId = nil
-    } else if self.transformer == nil {
+      loadedModelId = requestedModelId
+      loadedControlnetWeightsId = nil
+    } else if transformer == nil {
       logger.info("Reloading transformer (cache preserved)...")
       guard let snapshot = self.snapshot,
-            let modelConfigs = self.modelConfigs else {
+            let modelConfigs = self.modelConfigs
+      else {
         throw PipelineError.transformerNotLoaded
       }
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
@@ -666,7 +723,7 @@ public class ZImageControlPipeline {
         logger: logger
       )
       self.transformer = transformer
-      self.loadedControlnetWeightsId = nil
+      loadedControlnetWeightsId = nil
     } else {
       logger.info("Reusing cached model \(requestedModelId)")
     }
@@ -680,25 +737,26 @@ public class ZImageControlPipeline {
         )
         ZImageControlWeightsMapping.applyControlnetWeights(
           weights: result.weights,
-          to: self.transformer!,
+          to: transformer!,
           manifest: result.manifest,
           logger: logger
         )
-        self.loadedControlnetWeightsId = controlnetSpec
+        loadedControlnetWeightsId = controlnetSpec
       } else {
-        if self.loadedControlnetWeightsId != nil {
+        if loadedControlnetWeightsId != nil {
           clearControlnetWeights()
         }
-        self.loadedControlnetWeightsId = nil
+        loadedControlnetWeightsId = nil
       }
     } else if requestedControlnetId != nil {
       logger.info("Reusing cached controlnet weights")
     }
     try await applyLoRAIfNeeded(request.lora)
-    guard let snapshot = self.snapshot,
-          let modelConfigs = self.modelConfigs,
-          let tokenizer = self.tokenizer,
-          let vae = self.vae else {
+    guard let snapshot = snapshot,
+          let modelConfigs = modelConfigs,
+          let tokenizer = tokenizer,
+          let vae = vae
+    else {
       throw PipelineError.transformerNotLoaded
     }
     let doCFG = request.guidanceScale > 1.0
@@ -709,7 +767,8 @@ public class ZImageControlPipeline {
        cached.negativePrompt == request.negativePrompt,
        cached.maxSequenceLength == request.maxSequenceLength,
        cached.enhancePrompt == request.enhancePrompt,
-       cached.enhanceMaxTokens == request.enhanceMaxTokens {
+       cached.enhanceMaxTokens == request.enhanceMaxTokens
+    {
       logger.info("Reusing cached prompt embeddings")
       promptEmbeds = cached.promptEmbeds
       negativeEmbeds = cached.negativeEmbeds
@@ -721,7 +780,7 @@ public class ZImageControlPipeline {
         ))
       }
     } else {
-      if request.enhancePrompt && self.transformer != nil {
+      if request.enhancePrompt && transformer != nil {
         let availableMemory = getAvailableMemory()
         let textEncoderSize: UInt64 = 6 * 1024 * 1024 * 1024
         if availableMemory < textEncoderSize {
@@ -739,7 +798,7 @@ public class ZImageControlPipeline {
       let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
       let textEncoderWeights = try weightsMapper.loadTextEncoder()
-      ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: self.quantManifest, logger: logger)
+      ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
       var finalPrompt = request.prompt
       var enhancedPromptForCache: String? = nil
       if request.enhancePrompt {
@@ -846,7 +905,7 @@ public class ZImageControlPipeline {
       mu: modelConfigs.scheduler.useDynamicShifting ? mu : nil
     )
     let timestepsArray = scheduler.timesteps.asArray(Float.self)
-    if self.transformer == nil {
+    if transformer == nil {
       logger.info("Reloading transformer after prompt encoding...")
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
       let transformerModel = try loadControlTransformer(snapshot: snapshot, config: modelConfigs.transformer)
@@ -857,8 +916,8 @@ public class ZImageControlPipeline {
         manifest: quantManifest,
         logger: logger
       )
-      self.transformer = transformerModel
-      self.loadedControlnetWeightsId = nil
+      transformer = transformerModel
+      loadedControlnetWeightsId = nil
       if let controlnetSpec = request.controlnetWeights {
         logger.info("Reloading controlnet weights...")
         let result = try await loadControlnetWeights(
@@ -868,11 +927,11 @@ public class ZImageControlPipeline {
         )
         ZImageControlWeightsMapping.applyControlnetWeights(
           weights: result.weights,
-          to: self.transformer!,
+          to: transformer!,
           manifest: result.manifest,
           logger: logger
         )
-        self.loadedControlnetWeightsId = controlnetSpec
+        loadedControlnetWeightsId = controlnetSpec
       }
       if let loraConfig = request.lora {
         try await applyLoRAIfNeeded(loraConfig)
@@ -880,10 +939,10 @@ public class ZImageControlPipeline {
     }
     logger.info("Running \(request.steps) denoising steps with control_context_scale=\(request.controlContextScale)...")
     do {
-      guard let transformer = self.transformer else {
+      guard let transformer = transformer else {
         throw PipelineError.transformerNotLoaded
       }
-      for stepIndex in 0..<request.steps {
+      for stepIndex in 0 ..< request.steps {
         try Task.checkCancellation()
         request.progressCallback?(ControlProgress(
           stage: "Denoising",
@@ -943,7 +1002,9 @@ public class ZImageControlPipeline {
     logger.info("Wrote image to \(outputPath.path)")
     return outputPath
   }
+
   #if canImport(CoreGraphics)
+  // swiftlint:disable:next cyclomatic_complexity
   public func generateToMemory(_ request: ZImageControlGenerationRequest) async throws -> Data {
     logger.info("Requested Z-Image control generation (to memory)")
     let requestedModelId = request.model ?? ZImageRepository.id
@@ -951,18 +1012,34 @@ public class ZImageControlPipeline {
     let needsModelReload = (loadedModelId != requestedModelId)
     let needsControlnetReload = (loadedControlnetWeightsId != requestedControlnetId)
     if needsModelReload {
+      let canPreserveSharedComponents = loadedModelId != nil
+        && loadedModelId != requestedModelId
+        && ZImageModelRegistry.areZImageVariants(loadedModelId ?? "", requestedModelId)
+      if canPreserveSharedComponents {
+        logger.info("Switching Z-Image variant, preserving VAE and tokenizer")
+        textEncoder = nil
+        self.transformer = nil
+        self.modelConfigs = nil
+        self.quantManifest = nil
+        self.snapshot = nil
+        currentLoRA = nil
+        currentLoRAConfig = nil
+        cachedPromptEmbedding = nil
+        GPU.clearCache()
+      } else {
+        self.tokenizer = nil
+        textEncoder = nil
+        self.vae = nil
+        self.transformer = nil
+        self.modelConfigs = nil
+        self.quantManifest = nil
+        self.snapshot = nil
+        currentLoRA = nil
+        currentLoRAConfig = nil
+        cachedPromptEmbedding = nil
+        GPU.clearCache()
+      }
       logger.info("Loading model \(requestedModelId)...")
-      self.tokenizer = nil
-      self.textEncoder = nil
-      self.vae = nil
-      self.transformer = nil
-      self.modelConfigs = nil
-      self.quantManifest = nil
-      self.snapshot = nil
-      self.currentLoRA = nil
-      self.currentLoRAConfig = nil
-      self.cachedPromptEmbedding = nil
-      GPU.clearCache()
       let snapshot = try await PipelineSnapshot.prepare(model: request.model, logger: logger)
       let modelConfigs = try ZImageModelConfigs.load(from: snapshot)
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
@@ -973,13 +1050,22 @@ public class ZImageControlPipeline {
       self.snapshot = snapshot
       self.modelConfigs = modelConfigs
       self.quantManifest = quantManifest
-      logger.info("Loading tokenizer...")
-      self.tokenizer = try loadTokenizer(snapshot: snapshot)
-      logger.info("Loading VAE...")
-      let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
-      let vaeWeights = try weightsMapper.loadVAE()
-      ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
-      self.vae = vae
+      if self.tokenizer == nil {
+        logger.info("Loading tokenizer...")
+        self.tokenizer = try loadTokenizer(snapshot: snapshot)
+      } else {
+        logger.info("Reusing cached tokenizer")
+      }
+
+      if self.vae == nil {
+        logger.info("Loading VAE...")
+        let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
+        let vaeWeights = try weightsMapper.loadVAE()
+        ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
+        self.vae = vae
+      } else {
+        logger.info("Reusing cached VAE")
+      }
       logger.info("Loading control transformer...")
       let transformer = try loadControlTransformer(snapshot: snapshot, config: modelConfigs.transformer)
       let transformerWeights = try weightsMapper.loadTransformer()
@@ -990,12 +1076,13 @@ public class ZImageControlPipeline {
         logger: logger
       )
       self.transformer = transformer
-      self.loadedModelId = requestedModelId
-      self.loadedControlnetWeightsId = nil
-    } else if self.transformer == nil {
+      loadedModelId = requestedModelId
+      loadedControlnetWeightsId = nil
+    } else if transformer == nil {
       logger.info("Reloading transformer (cache preserved)...")
       guard let snapshot = self.snapshot,
-            let modelConfigs = self.modelConfigs else {
+            let modelConfigs = self.modelConfigs
+      else {
         throw PipelineError.transformerNotLoaded
       }
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
@@ -1009,7 +1096,7 @@ public class ZImageControlPipeline {
         logger: logger
       )
       self.transformer = transformer
-      self.loadedControlnetWeightsId = nil
+      loadedControlnetWeightsId = nil
     } else {
       logger.info("Reusing cached model \(requestedModelId)")
     }
@@ -1023,25 +1110,26 @@ public class ZImageControlPipeline {
         )
         ZImageControlWeightsMapping.applyControlnetWeights(
           weights: result.weights,
-          to: self.transformer!,
+          to: transformer!,
           manifest: result.manifest,
           logger: logger
         )
-        self.loadedControlnetWeightsId = controlnetSpec
+        loadedControlnetWeightsId = controlnetSpec
       } else {
-        if self.loadedControlnetWeightsId != nil {
+        if loadedControlnetWeightsId != nil {
           clearControlnetWeights()
         }
-        self.loadedControlnetWeightsId = nil
+        loadedControlnetWeightsId = nil
       }
     } else if requestedControlnetId != nil {
       logger.info("Reusing cached controlnet weights")
     }
     try await applyLoRAIfNeeded(request.lora)
-    guard let snapshot = self.snapshot,
-          let modelConfigs = self.modelConfigs,
-          let tokenizer = self.tokenizer,
-          let vae = self.vae else {
+    guard let snapshot = snapshot,
+          let modelConfigs = modelConfigs,
+          let tokenizer = tokenizer,
+          let vae = vae
+    else {
       throw PipelineError.transformerNotLoaded
     }
     let doCFG = request.guidanceScale > 1.0
@@ -1052,7 +1140,8 @@ public class ZImageControlPipeline {
        cached.negativePrompt == request.negativePrompt,
        cached.maxSequenceLength == request.maxSequenceLength,
        cached.enhancePrompt == request.enhancePrompt,
-       cached.enhanceMaxTokens == request.enhanceMaxTokens {
+       cached.enhanceMaxTokens == request.enhanceMaxTokens
+    {
       logger.info("Reusing cached prompt embeddings")
       promptEmbeds = cached.promptEmbeds
       negativeEmbeds = cached.negativeEmbeds
@@ -1064,7 +1153,7 @@ public class ZImageControlPipeline {
         ))
       }
     } else {
-      if request.enhancePrompt && self.transformer != nil {
+      if request.enhancePrompt && transformer != nil {
         let availableMemory = getAvailableMemory()
         let textEncoderSize: UInt64 = 6 * 1024 * 1024 * 1024
         if availableMemory < textEncoderSize {
@@ -1082,7 +1171,7 @@ public class ZImageControlPipeline {
       let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
       let textEncoderWeights = try weightsMapper.loadTextEncoder()
-      ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: self.quantManifest, logger: logger)
+      ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
       var finalPrompt = request.prompt
       var enhancedPromptForCache: String? = nil
       if request.enhancePrompt {
@@ -1173,7 +1262,7 @@ public class ZImageControlPipeline {
       mu: modelConfigs.scheduler.useDynamicShifting ? mu : nil
     )
     let timestepsArray = scheduler.timesteps.asArray(Float.self)
-    if self.transformer == nil {
+    if transformer == nil {
       logger.info("Reloading transformer after prompt encoding...")
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
       let transformerModel = try loadControlTransformer(snapshot: snapshot, config: modelConfigs.transformer)
@@ -1184,8 +1273,8 @@ public class ZImageControlPipeline {
         manifest: quantManifest,
         logger: logger
       )
-      self.transformer = transformerModel
-      self.loadedControlnetWeightsId = nil
+      transformer = transformerModel
+      loadedControlnetWeightsId = nil
       if let controlnetSpec = request.controlnetWeights {
         logger.info("Reloading controlnet weights...")
         let result = try await loadControlnetWeights(
@@ -1195,11 +1284,11 @@ public class ZImageControlPipeline {
         )
         ZImageControlWeightsMapping.applyControlnetWeights(
           weights: result.weights,
-          to: self.transformer!,
+          to: transformer!,
           manifest: result.manifest,
           logger: logger
         )
-        self.loadedControlnetWeightsId = controlnetSpec
+        loadedControlnetWeightsId = controlnetSpec
       }
       if let loraConfig = request.lora {
         try await applyLoRAIfNeeded(loraConfig)
@@ -1207,10 +1296,10 @@ public class ZImageControlPipeline {
     }
     logger.info("Running \(request.steps) denoising steps with control_context_scale=\(request.controlContextScale)...")
     do {
-      guard let transformer = self.transformer else {
+      guard let transformer = transformer else {
         throw PipelineError.transformerNotLoaded
       }
-      for stepIndex in 0..<request.steps {
+      for stepIndex in 0 ..< request.steps {
         try Task.checkCancellation()
         request.progressCallback?(ControlProgress(
           stage: "Denoising",
@@ -1271,10 +1360,12 @@ public class ZImageControlPipeline {
   private func decodeLatents(_ latents: MLXArray, vae: AutoencoderKL, height: Int, width: Int) -> MLXArray {
     PipelineUtilities.decodeLatents(latents, vae: vae, height: height, width: width)
   }
+
   private struct ControlnetWeightsResult {
     let weights: [String: MLXArray]
     let manifest: ZImageQuantizationManifest?
   }
+
   private func loadControlnetWeights(
     controlnetSpec: String,
     preferredFile: String? = nil,
@@ -1319,8 +1410,14 @@ public class ZImageControlPipeline {
       )
       return try loadControlnetFromDirectory(snapshot, dtype: dtype, preferredFile: preferredFile)
     }
-    throw PipelineError.weightsMissing("Invalid controlnet spec: \(controlnetSpec). Provide a local .safetensors path, directory, or HuggingFace model ID (e.g., alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1)")
+    throw PipelineError.weightsMissing("""
+      Invalid controlnet spec: \(controlnetSpec).
+       Provide a local .safetensors path, directory,
+      or HuggingFace model ID (e.g., alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1)
+      """
+    )
   }
+
   private func loadControlnetFromDirectory(_ directory: URL, dtype: DType, preferredFile: String? = nil) throws -> ControlnetWeightsResult {
     let fm = FileManager.default
     var manifest: ZImageQuantizationManifest? = nil
@@ -1351,6 +1448,7 @@ public class ZImageControlPipeline {
     }
     return ControlnetWeightsResult(weights: allWeights, manifest: manifest)
   }
+
   private func loadSafetensorsFile(url: URL, dtype: DType, preserveQuantized: Bool = false) throws -> [String: MLXArray] {
     var tensors: [String: MLXArray] = [:]
     let reader = try SafeTensorsReader(fileURL: url)
@@ -1358,7 +1456,7 @@ public class ZImageControlPipeline {
       var tensor = try reader.tensor(named: meta.name)
       let isQuantizedWeight = preserveQuantized && (tensor.dtype == .uint32)
       let isScalesOrBiases = preserveQuantized && (meta.name.hasSuffix(".scales") || meta.name.hasSuffix(".biases"))
-      if !isQuantizedWeight && !isScalesOrBiases && tensor.dtype != dtype {
+      if !isQuantizedWeight, !isScalesOrBiases, tensor.dtype != dtype {
         tensor = tensor.asType(dtype)
       }
       tensors[meta.name] = tensor
@@ -1366,6 +1464,7 @@ public class ZImageControlPipeline {
     logger.info("Loaded \(tensors.count) controlnet tensors")
     return tensors
   }
+
   private func calculateShift(
     imageSeqLen: Int,
     baseSeqLen: Int,
@@ -1382,6 +1481,7 @@ public class ZImageControlPipeline {
     )
   }
 }
+
 public enum ZImageControlWeightsMapping {
   private static func transformerMapping(_ weights: [String: MLXArray]) -> [String: MLXArray] {
     var mapped: [String: MLXArray] = [:]
@@ -1390,9 +1490,11 @@ public enum ZImageControlWeightsMapping {
     }
     return mapped
   }
+
   private static func applyToModule(_ module: Module, weights: [String: MLXArray], prefix: String, logger: Logger) {
     applyToModule(module, weights: weights, prefix: prefix, logger: logger, tensorNameTransform: nil)
   }
+
   private static func applyToModule(
     _ module: Module,
     weights: [String: MLXArray],
@@ -1456,6 +1558,7 @@ public enum ZImageControlWeightsMapping {
       logger.error("Failed to apply weights to \(prefix): \(error)")
     }
   }
+
   public static func applyControlTransformer(
     weights: [String: MLXArray],
     to transformer: ZImageControlTransformer2DModel,
@@ -1481,6 +1584,7 @@ public enum ZImageControlWeightsMapping {
     transformer.setPadTokens(xPad: weights["x_pad_token"], capPad: weights["cap_pad_token"])
     logger.info("Applied base transformer weights to control transformer")
   }
+
   public static func applyControlnetWeights(
     weights: [String: MLXArray],
     to transformer: ZImageControlTransformer2DModel,
@@ -1528,6 +1632,7 @@ public enum ZImageControlWeightsMapping {
     }
     logger.info("Applied controlnet weights")
   }
+
   private static func applyTransformerBlockWeights(
     weights: [String: MLXArray],
     prefix: String,
@@ -1584,6 +1689,7 @@ public enum ZImageControlWeightsMapping {
       block.feedForward.w3.weight._updateInternal(w)
     }
   }
+
   private static func applyBaseTransformerBlockWeights(
     weights: [String: MLXArray],
     prefix: String,
@@ -1644,6 +1750,8 @@ public enum ZImageControlWeightsMapping {
       block.feedForward.w3.weight._updateInternal(w)
     }
   }
+
+  // swiftlint:disable:next cyclomatic_complexity
   private static func applyControlTransformerBlockWeights(
     weights: [String: MLXArray],
     prefix: String,

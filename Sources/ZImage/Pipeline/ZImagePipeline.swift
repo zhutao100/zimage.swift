@@ -1,11 +1,11 @@
+import Dispatch
 import Foundation
+import Hub
 import Logging
 import MLX
 import MLXNN
 import MLXRandom
 import Tokenizers
-import Hub
-import Dispatch
 
 public struct ZImageGenerationRequest: Sendable {
   public var prompt: String
@@ -93,9 +93,11 @@ public final class ZImagePipeline {
     self.logger = logger
     self.hubApi = hubApi
   }
+
   public var isLoaded: Bool {
     return isModelLoaded
   }
+
   public func unloadModel() {
     tokenizer = nil
     textEncoder = nil
@@ -132,6 +134,7 @@ public final class ZImagePipeline {
     GPU.clearCache()
     logger.info("LoRA unloaded (instant)")
   }
+
   public func unloadTransformer() {
     transformer = nil
 
@@ -162,7 +165,7 @@ public final class ZImagePipeline {
     return try QwenTokenizer.load(from: tokDir, hubApi: hubApi)
   }
 
-  private func loadTextEncoder(snapshot: URL, config: ZImageTextEncoderConfig) throws -> QwenTextEncoder {
+  private func loadTextEncoder(snapshot _: URL, config: ZImageTextEncoderConfig) throws -> QwenTextEncoder {
     return QwenTextEncoder(
       configuration: .init(
         vocabSize: config.vocabSize,
@@ -179,7 +182,7 @@ public final class ZImagePipeline {
     )
   }
 
-  private func loadTransformer(snapshot: URL, config: ZImageTransformerConfig) throws -> ZImageTransformer2DModel {
+  private func loadTransformer(snapshot _: URL, config: ZImageTransformerConfig) throws -> ZImageTransformer2DModel {
     return ZImageTransformer2DModel(configuration: config)
   }
 
@@ -196,7 +199,7 @@ public final class ZImagePipeline {
 
     for (key, param) in params {
       guard var tensor = weights[key] else { continue }
-      if transpose4DTensors && tensor.ndim == 4 {
+      if transpose4DTensors, tensor.ndim == 4 {
         tensor = tensor.transposed(0, 2, 3, 1)
       }
       if tensor.shape != param.shape {
@@ -213,7 +216,7 @@ public final class ZImagePipeline {
     return mismatches
   }
 
-  private func loadVAEDecoder(snapshot: URL, config: ZImageVAEConfig) throws -> AutoencoderDecoderOnly {
+  private func loadVAEDecoder(snapshot _: URL, config: ZImageVAEConfig) throws -> AutoencoderDecoderOnly {
     AutoencoderDecoderOnly(configuration: .init(
       inChannels: config.inChannels,
       outChannels: config.outChannels,
@@ -339,6 +342,7 @@ public final class ZImagePipeline {
       activeTransformerOverrideURL = overrideURL
     }
   }
+
   public struct GenerationProgress: Sendable {
     public let stage: Stage
     public let stepIndex: Int
@@ -376,7 +380,7 @@ public final class ZImagePipeline {
     let normalizedAIOPath = aioCheckpointURL?.standardizedFileURL.path
     let currentAIOPath = activeAIOCheckpointURL?.standardizedFileURL.path
     let hasLoadedComponents = tokenizer != nil && textEncoder != nil && transformer != nil && vae != nil && modelConfigs != nil && modelSnapshot != nil
-    if isModelLoaded && loadedModelId == modelId && normalizedAIOPath == currentAIOPath && hasLoadedComponents {
+    if isModelLoaded, loadedModelId == modelId, normalizedAIOPath == currentAIOPath, hasLoadedComponents {
       logger.info("Model already loaded, skipping load")
       return
     }
@@ -385,7 +389,7 @@ public final class ZImagePipeline {
       && currentAIOPath == nil
       && normalizedAIOPath == nil
       && areZImageVariants(loadedModelId ?? "", modelId)
-    if isModelLoaded && (loadedModelId != modelId || normalizedAIOPath != currentAIOPath) {
+    if isModelLoaded, loadedModelId != modelId || normalizedAIOPath != currentAIOPath {
       if canPreserveSharedComponents {
         logger.info("Switching Z-Image variant, preserving VAE and tokenizer")
 
@@ -540,6 +544,7 @@ public final class ZImagePipeline {
 
     logger.info("Model loaded successfully and cached in memory")
   }
+
   public func loadLoRA(_ config: LoRAConfiguration, progressHandler: ProgressHandler? = nil) async throws {
     guard let trans = transformer else {
       throw PipelineError.transformerNotLoaded
@@ -557,7 +562,6 @@ public final class ZImagePipeline {
     logger.info("Loading LoRA from \(config.source.displayName)...")
 
     do {
-
       let loraWeights = try await LoRAWeightLoader.load(from: config)
       logger.info("Loaded LoRA: rank=\(loraWeights.rank), alpha=\(loraWeights.alpha), layers=\(loraWeights.layerCount)")
 
@@ -572,9 +576,11 @@ public final class ZImagePipeline {
       throw PipelineError.loraError(error)
     }
   }
+
   public var hasLoRALoaded: Bool {
     return currentLoRA != nil
   }
+
   public var loadedLoRAConfig: LoRAConfiguration? {
     return currentLoRAConfig
   }
@@ -590,6 +596,7 @@ public final class ZImagePipeline {
 
     return request.outputPath
   }
+
   public func generateToMemory(_ request: ZImageGenerationRequest, progressHandler: ProgressHandler? = nil) async throws -> Data {
     logger.info("Requested Z-Image generation (to memory)")
 
@@ -601,8 +608,8 @@ public final class ZImagePipeline {
 
     return imageData
   }
-  private func generateCore(_ request: ZImageGenerationRequest, progressHandler: ProgressHandler? = nil) async throws -> MLXArray {
 
+  private func generateCore(_ request: ZImageGenerationRequest, progressHandler: ProgressHandler? = nil) async throws -> MLXArray {
     let vaeScale = 16
     if request.width % vaeScale != 0 {
       throw PipelineError.invalidDimensions("Width must be divisible by \(vaeScale) (got \(request.width)). Please adjust to a multiple of \(vaeScale).")
@@ -619,7 +626,8 @@ public final class ZImagePipeline {
     )
 
     guard let vae = vae,
-          let modelConfigs = modelConfigs else {
+          let modelConfigs = modelConfigs
+    else {
       throw PipelineError.modelNotLoaded
     }
 
@@ -628,12 +636,10 @@ public final class ZImagePipeline {
     }
 
     if let loraConfig = request.lora {
-
       if currentLoRAConfig != loraConfig {
         try await loadLoRA(loraConfig, progressHandler: progressHandler)
       }
     } else if currentLoRA != nil {
-
       unloadLoRA()
     }
     progressHandler?(GenerationProgress(stage: .encodingText, stepIndex: 0, totalSteps: request.steps))
@@ -682,7 +688,7 @@ public final class ZImagePipeline {
       }
     }
     logger.info("Text encoding complete")
-    self.textEncoder = nil
+    textEncoder = nil
     GPU.clearCache()
 
     let vaeDivisor = modelConfigs.vae.latentDivisor
@@ -713,7 +719,7 @@ public final class ZImagePipeline {
       guard let transformer = transformer else {
         throw PipelineError.transformerNotLoaded
       }
-      for stepIndex in 0..<request.steps {
+      for stepIndex in 0 ..< request.steps {
         try Task.checkCancellation()
         progressHandler?(GenerationProgress(stage: .denoising, stepIndex: stepIndex, totalSteps: request.steps))
         let timestep = timestepsArray[stepIndex]
@@ -777,11 +783,7 @@ public final class ZImagePipeline {
   }
 
   private func areZImageVariants(_ model1: String, _ model2: String) -> Bool {
-    let zImageIds: Set<String> = [
-      "Tongyi-MAI/Z-Image-Turbo",
-      "mzbac/Z-Image-Turbo-8bit"
-    ]
-    return zImageIds.contains(model1) && zImageIds.contains(model2)
+    ZImageModelRegistry.areZImageVariants(model1, model2)
   }
 
   private func inferTransformerDim(from weights: [String: MLXArray]) -> Int? {
@@ -823,16 +825,16 @@ public final class ZImagePipeline {
 
       // Split attention.qkv.weight -> to_q.weight, to_k.weight, to_v.weight
       if key.hasSuffix(".attention.qkv.weight") {
-        if v.ndim == 2 && v.dim(0) == dim * 3 && v.dim(1) == dim {
+        if v.ndim == 2, v.dim(0) == dim * 3, v.dim(1) == dim {
           let q = v[0 ..< dim, 0...]
-          let kW = v[dim ..< 2*dim, 0...]
-          let vW = v[2*dim ..< 3*dim, 0...]
+          let kW = v[dim ..< 2 * dim, 0...]
+          let vW = v[2 * dim ..< 3 * dim, 0...]
           let base = key.replacingOccurrences(of: ".attention.qkv.weight", with: "")
           out["\(base).attention.to_q.weight"] = q
           out["\(base).attention.to_k.weight"] = kW
           out["\(base).attention.to_v.weight"] = vW
         } else {
-          logger.warning("Unexpected qkv shape for \(key): \(v.shape) (expected [\(dim*3), \(dim)])")
+          logger.warning("Unexpected qkv shape for \(key): \(v.shape) (expected [\(dim * 3), \(dim)])")
         }
         continue
       }
@@ -894,10 +896,13 @@ public final class ZImagePipeline {
       let percent = Int((coverage * 100.0).rounded())
       let missingSample = audit.missing.prefix(10).joined(separator: ", ")
       let suffix = audit.missing.count > 10 ? ", ..." : ""
-      throw PipelineError.weightsMissing(
-        "AIO transformer weights coverage too low: matched \(audit.matched)/\(total) (\(percent)%). Missing (sample): \(missingSample)\(suffix). Use --force-transformer-override-only to treat it as transformer-only."
+      throw PipelineError.weightsMissing("""
+        AIO transformer weights coverage too low:
+         matched \(audit.matched)/\(total) (\(percent)%).
+         Missing (sample): \(missingSample)\(suffix).
+         Use --force-transformer-override-only to treat it as transformer-only.
+        """
       )
     }
   }
-
 }
