@@ -2,13 +2,14 @@ import Foundation
 import Logging
 import MLX
 
-
 public struct ZImageWeightsMapper {
   private let snapshot: URL
+  private let weightsVariant: String?
   private let logger: Logger
 
-  public init(snapshot: URL, logger: Logger) {
+  public init(snapshot: URL, weightsVariant: String? = nil, logger: Logger) {
     self.snapshot = snapshot
+    self.weightsVariant = weightsVariant
     self.logger = logger
   }
 
@@ -20,7 +21,6 @@ public struct ZImageWeightsMapper {
     let manifestURL = snapshot.appendingPathComponent("quantization.json")
     return try? ZImageQuantizationManifest.load(from: manifestURL)
   }
-
 
   public func loadAll(dtype: DType? = .bfloat16) throws -> [String: MLXArray] {
     if hasQuantization() {
@@ -34,14 +34,20 @@ public struct ZImageWeightsMapper {
     if hasQuantization() {
       return try loadQuantizedComponent("text_encoder")
     }
-    return try loadStandardComponent(files: ZImageFiles.resolveTextEncoderWeights(at: snapshot), dtype: dtype)
+    return try loadStandardComponent(
+      files: ZImageFiles.resolveTextEncoderWeights(at: snapshot, weightsVariant: weightsVariant, logger: logger),
+      dtype: dtype
+    )
   }
 
   public func loadTransformer(dtype: DType? = .bfloat16) throws -> [String: MLXArray] {
     if hasQuantization() {
       return try loadQuantizedComponent("transformer")
     }
-    return try loadStandardComponent(files: ZImageFiles.resolveTransformerWeights(at: snapshot), dtype: dtype)
+    return try loadStandardComponent(
+      files: ZImageFiles.resolveTransformerWeights(at: snapshot, weightsVariant: weightsVariant, logger: logger),
+      dtype: dtype
+    )
   }
 
   /// Load transformer weights from a standalone safetensors file (override file)
@@ -72,7 +78,10 @@ public struct ZImageWeightsMapper {
       }
       return tensors
     }
-    return try loadStandardComponent(files: ZImageFiles.vaeWeights, dtype: dtype)
+    return try loadStandardComponent(
+      files: ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: weightsVariant, logger: logger),
+      dtype: dtype
+    )
   }
 
   /// Load controlnet weights from a standalone safetensors file
@@ -86,7 +95,7 @@ public struct ZImageWeightsMapper {
 
     guard FileManager.default.fileExists(atPath: url.path) else {
       throw NSError(domain: "ZImageWeightsMapper", code: 1, userInfo: [
-        NSLocalizedDescriptionKey: "Controlnet weights file not found: \(url.path)"
+        NSLocalizedDescriptionKey: "Controlnet weights file not found: \(url.path)",
       ])
     }
 
@@ -150,13 +159,22 @@ public struct ZImageWeightsMapper {
   private func loadStandardAll(dtype: DType?) throws -> [String: MLXArray] {
     var tensors: [String: MLXArray] = [:]
 
-    for (key, value) in try loadStandardComponent(files: ZImageFiles.resolveTransformerWeights(at: snapshot), dtype: dtype) {
+    for (key, value) in try loadStandardComponent(
+      files: ZImageFiles.resolveTransformerWeights(at: snapshot, weightsVariant: weightsVariant, logger: logger),
+      dtype: dtype
+    ) {
       tensors["transformer.\(key)"] = value
     }
-    for (key, value) in try loadStandardComponent(files: ZImageFiles.resolveTextEncoderWeights(at: snapshot), dtype: dtype) {
+    for (key, value) in try loadStandardComponent(
+      files: ZImageFiles.resolveTextEncoderWeights(at: snapshot, weightsVariant: weightsVariant, logger: logger),
+      dtype: dtype
+    ) {
       tensors["text_encoder.\(key)"] = value
     }
-    for (key, value) in try loadStandardComponent(files: ZImageFiles.vaeWeights, dtype: dtype) {
+    for (key, value) in try loadStandardComponent(
+      files: ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: weightsVariant, logger: logger),
+      dtype: dtype
+    ) {
       tensors["vae.\(key)"] = value
     }
 

@@ -16,6 +16,17 @@ The pipelines accept `model` as either:
 
 The CLI flag is `--model/-m` (see `Sources/ZImageCLI/main.swift`).
 
+## Weights Variant (`--weights-variant`)
+
+Some Hugging Face repos ship multiple precision variants (e.g. `fp16`, `bf16`) with different `*.safetensors` (and often `*.safetensors.index.json`) filenames.
+
+When `--weights-variant <name>` is provided:
+
+- Weight resolution prefers `*.{name}.safetensors.index.json` when present.
+- Directory scans and index selection avoid mixing shards across variants.
+- Downloads only fetch files matching the requested variant (plus required `*.json` + `tokenizer/*`).
+- If any required component (transformer / text encoder / VAE) is missing matching weights for the requested variant, loading fails with a clear error.
+
 ## Hugging Face Cache
 
 When downloading from Hugging Face, the resolver looks for an existing snapshot first, and otherwise downloads into the standard HF cache layout.

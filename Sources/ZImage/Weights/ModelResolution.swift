@@ -9,20 +9,19 @@ public enum ModelResolutionError: Error, LocalizedError {
 
   public var errorDescription: String? {
     switch self {
-    case .modelNotFound(let spec):
+    case let .modelNotFound(spec):
       return "Model not found: \(spec)"
-    case .downloadFailed(let modelId, let error):
+    case let .downloadFailed(modelId, error):
       return "Failed to download '\(modelId)': \(error.localizedDescription)"
     case .networkUnavailable:
       return "No internet connection. Please check your network or use a local model path."
-    case .authorizationRequired(let modelId):
+    case let .authorizationRequired(modelId):
       return "Model '\(modelId)' not found or requires authentication"
     }
   }
 }
 
-public struct ModelResolution {
-
+public enum ModelResolution {
   public static func isHuggingFaceModelId(_ modelSpec: String) -> Bool {
     if modelSpec.hasPrefix("/") || modelSpec.hasPrefix("./") || modelSpec.hasPrefix("../") {
       return false
@@ -61,10 +60,11 @@ public struct ModelResolution {
 
   public static func resolve(
     modelSpec: String,
-    defaultModelId: String = ZImageRepository.id,
+    defaultModelId _: String = ZImageRepository.id,
     defaultRevision: String = ZImageRepository.revision,
     filePatterns: [String] = ["*.safetensors", "*.json", "tokenizer/*"],
     requireWeights: Bool = true,
+    snapshotValidator: (@Sendable (URL) -> Bool)? = nil,
     progressHandler: (@Sendable (Progress) -> Void)? = nil
   ) async throws -> URL {
     let localURL = URL(fileURLWithPath: modelSpec).standardizedFileURL
@@ -80,7 +80,12 @@ public struct ModelResolution {
     let modelId = String(parts[0])
     let revision = parts.count > 1 ? String(parts[1]) : defaultRevision
 
-    if let cachedURL = findCachedModel(modelId: modelId, revision: revision, requireWeights: requireWeights) {
+    if let cachedURL = findCachedModel(
+      modelId: modelId,
+      revision: revision,
+      requireWeights: requireWeights,
+      snapshotValidator: snapshotValidator
+    ) {
       return cachedURL
     }
 
@@ -98,6 +103,7 @@ public struct ModelResolution {
     defaultRevision: String = ZImageRepository.revision,
     filePatterns: [String] = ["*.safetensors", "*.json", "tokenizer/*"],
     requireWeights: Bool = true,
+    snapshotValidator: (@Sendable (URL) -> Bool)? = nil,
     progressHandler: (@Sendable (Progress) -> Void)? = nil
   ) async throws -> URL {
     if let spec = modelSpec {
@@ -107,11 +113,17 @@ public struct ModelResolution {
         defaultRevision: defaultRevision,
         filePatterns: filePatterns,
         requireWeights: requireWeights,
+        snapshotValidator: snapshotValidator,
         progressHandler: progressHandler
       )
     }
 
-    if let cachedURL = findCachedModel(modelId: defaultModelId, revision: defaultRevision, requireWeights: requireWeights) {
+    if let cachedURL = findCachedModel(
+      modelId: defaultModelId,
+      revision: defaultRevision,
+      requireWeights: requireWeights,
+      snapshotValidator: snapshotValidator
+    ) {
       return cachedURL
     }
 
@@ -144,7 +156,12 @@ public struct ModelResolution {
     return HubApi(downloadBase: hfCacheDir)
   }
 
-  private static func findCachedModel(modelId: String, revision: String?, requireWeights: Bool = true) -> URL? {
+  private static func findCachedModel(
+    modelId: String,
+    revision: String?,
+    requireWeights: Bool = true,
+    snapshotValidator: (@Sendable (URL) -> Bool)? = nil
+  ) -> URL? {
     let fm = FileManager.default
     let cacheDir = getHuggingFaceCacheDirectory()
 
@@ -178,9 +195,15 @@ public struct ModelResolution {
 
     func isValidCacheDirectory(_ directory: URL) -> Bool {
       if requireWeights {
-        return directoryHasSafetensors(directory)
+        guard directoryHasSafetensors(directory) else { return false }
+      } else {
+        guard directoryHasModelIndexOrConfig(directory) else { return false }
       }
-      return directoryHasModelIndexOrConfig(directory)
+
+      if let snapshotValidator {
+        return snapshotValidator(directory)
+      }
+      return true
     }
 
     // HuggingFace CLI / huggingface_hub cache layout:
@@ -204,7 +227,8 @@ public struct ModelResolution {
           let refFile = repoCacheRoot.appendingPathComponent("refs").appendingPathComponent(trimmed)
           if let commit = try? String(contentsOf: refFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines),
-            !commit.isEmpty {
+            !commit.isEmpty
+          {
             let candidate = snapshotsRoot.appendingPathComponent(commit)
             if fm.fileExists(atPath: candidate.path), isValidCacheDirectory(candidate) {
               preferredSnapshot = candidate

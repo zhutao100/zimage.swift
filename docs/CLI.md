@@ -30,6 +30,7 @@ Common flags:
 - `--width/-W`, `--height/-H` (defaults: `ZImageModelMetadata.recommendedWidth/Height`)
 - `--steps/-s`, `--guidance/-g` (defaults: `ZImageModelMetadata.recommendedInferenceSteps/GuidanceScale`)
 - `--model/-m` (defaults to `Tongyi-MAI/Z-Image-Turbo`)
+- `--weights-variant` (optional HF precision variant like `fp16` / `bf16`)
 - `--max-sequence-length` (default: 512)
 - `--cache-limit` (GPU cache limit in MB; default: unlimited)
 

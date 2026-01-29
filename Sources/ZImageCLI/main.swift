@@ -1,10 +1,10 @@
-import Foundation
+import Darwin
 import Dispatch
+import Foundation
 import Logging
 import Metal
 import MLX
 import ZImage
-import Darwin
 
 #if canImport(CoreGraphics)
 import CoreGraphics
@@ -16,18 +16,20 @@ LoggingSystem.bootstrap { label in
   handler.logLevel = .info
   return handler
 }
+
 private final class Box<T>: @unchecked Sendable {
   var value: T
   init(_ value: T) { self.value = value }
 }
 
-struct ZImageCLI {
+enum ZImageCLI {
   static let logger: Logger = {
     var logger = Logger(label: "z-image.cli")
     logger.logLevel = .info
     return logger
   }()
 
+  // swiftlint:disable:next cyclomatic_complexity
   static func run() throws {
     if let dev = MTLCreateSystemDefaultDevice() {
       logger.info("Metal device: \(dev.name)")
@@ -44,6 +46,7 @@ struct ZImageCLI {
     var seed: UInt64?
     var outputPath = "z-image.png"
     var model: String?
+    var weightsVariant: String?
     var cacheLimit: Int?
     var maxSequenceLength = 512
     var loraPath: String?
@@ -76,6 +79,8 @@ struct ZImageCLI {
         outputPath = nextValue(for: arg, iterator: &iterator)
       case "--model", "-m":
         model = nextValue(for: arg, iterator: &iterator)
+      case "--weights-variant":
+        weightsVariant = nextValue(for: arg, iterator: &iterator)
       case "--force-transformer-override-only":
         forceTransformerOverrideOnly = true
       case "--cache-limit":
@@ -119,7 +124,6 @@ struct ZImageCLI {
       logger.info("GPU cache limit set to \(limit)MB")
     }
     let loraConfig: LoRAConfiguration? = loraPath.map { path in
-
       if path.hasPrefix("/") || path.hasPrefix("./") || path.hasPrefix("~") {
         return .local(path, scale: loraScale)
       } else {
@@ -137,6 +141,7 @@ struct ZImageCLI {
       seed: seed,
       outputPath: URL(fileURLWithPath: outputPath),
       model: model,
+      weightsVariant: weightsVariant,
       maxSequenceLength: maxSequenceLength,
       lora: loraConfig,
       enhancePrompt: enhancePrompt,
@@ -188,6 +193,7 @@ struct ZImageCLI {
       --seed                 Random seed
       --output, -o           Output path (default z-image.png)
       --model, -m            Model path or HuggingFace ID (default: \(ZImageRepository.id))
+      --weights-variant      Weights precision variant (e.g. fp16, bf16)
       --force-transformer-override-only  Treat a local .safetensors as transformer-only override (disable AIO auto-detect)
       --cache-limit          GPU memory cache limit in MB (default: unlimited)
       --max-sequence-length  Maximum sequence length for text encoding (default: 512)
@@ -375,18 +381,15 @@ struct ZImageCLI {
 
     Task {
       do {
-
         let sourceURL: URL
         let localURL = URL(fileURLWithPath: inputPath)
 
         if FileManager.default.fileExists(atPath: localURL.path) {
-
           sourceURL = localURL
           if capturedVerbose {
             print("Using local ControlNet: \(inputPath)")
           }
         } else if ModelResolution.isHuggingFaceModelId(inputPath) {
-
           if capturedVerbose {
             print("Downloading ControlNet from HuggingFace: \(inputPath)")
           }
@@ -452,6 +455,7 @@ struct ZImageCLI {
     """)
   }
 
+  // swiftlint:disable:next cyclomatic_complexity
   private static func runControl(args: [String]) throws {
     var prompt: String?
     var negativePrompt: String?
@@ -468,6 +472,7 @@ struct ZImageCLI {
     var seed: UInt64?
     var outputPath = "z-image-control.png"
     var model: String?
+    var weightsVariant: String?
     var cacheLimit: Int?
     var maxSequenceLength = 512
     var noProgress = false
@@ -505,6 +510,8 @@ struct ZImageCLI {
         outputPath = nextValue(for: arg, iterator: &iterator)
       case "--model", "-m":
         model = nextValue(for: arg, iterator: &iterator)
+      case "--weights-variant":
+        weightsVariant = nextValue(for: arg, iterator: &iterator)
       case "--cache-limit":
         cacheLimit = intValue(for: arg, iterator: &iterator, minimum: 1, fallback: 2048)
       case "--max-sequence-length":
@@ -524,7 +531,7 @@ struct ZImageCLI {
       printControlUsage()
       return
     }
-    if controlImage == nil && inpaintImage == nil && maskImage == nil {
+    if controlImage == nil, inpaintImage == nil, maskImage == nil {
       logger.error("At least one of --control-image, --inpaint-image, or --mask must be provided")
       printControlUsage()
       return
@@ -601,6 +608,7 @@ struct ZImageCLI {
       seed: seed,
       outputPath: URL(fileURLWithPath: outputPath),
       model: model,
+      weightsVariant: weightsVariant,
       controlnetWeights: controlnetWeights,
       controlnetWeightsFile: controlnetWeightsFile,
       maxSequenceLength: maxSequenceLength,
@@ -644,6 +652,7 @@ struct ZImageCLI {
       --seed                    Random seed
       --output, -o              Output path (default z-image-control.png)
       --model, -m               Model path or HuggingFace ID (default: \(ZImageRepository.id))
+      --weights-variant         Weights precision variant (e.g. fp16, bf16)
       --cache-limit             GPU memory cache limit in MB (default: unlimited)
       --max-sequence-length     Maximum sequence length for text encoding (default: 512)
       --no-progress             Disable progress output
@@ -696,7 +705,6 @@ struct ZImageCLI {
   private static func floatValue(for arg: String, iterator: inout IndexingIterator<[String]>, fallback: Float) -> Float {
     Float(nextValue(for: arg, iterator: &iterator)) ?? fallback
   }
-
 }
 
 // MARK: - Progress Helpers
@@ -769,7 +777,7 @@ private final class ProgressBar {
   func finish(forceNewline: Bool = true) {
     if isFinished { return }
     isFinished = true
-    if let data = ("\r\u{001B}[2K").data(using: .utf8) {
+    if let data = "\r\u{001B}[2K".data(using: .utf8) {
       FileHandle.standardError.write(data)
     }
     if forceNewline, let nl = "\n".data(using: .utf8) {

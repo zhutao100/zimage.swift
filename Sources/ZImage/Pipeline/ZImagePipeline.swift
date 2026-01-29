@@ -17,6 +17,7 @@ public struct ZImageGenerationRequest: Sendable {
   public var seed: UInt64?
   public var outputPath: URL
   public var model: String?
+  public var weightsVariant: String?
   public var maxSequenceLength: Int
 
   public var lora: LoRAConfiguration?
@@ -36,6 +37,7 @@ public struct ZImageGenerationRequest: Sendable {
     seed: UInt64? = nil,
     outputPath: URL = URL(fileURLWithPath: "z-image.png"),
     model: String? = nil,
+    weightsVariant: String? = nil,
     maxSequenceLength: Int = 512,
     lora: LoRAConfiguration? = nil,
     enhancePrompt: Bool = false,
@@ -51,6 +53,7 @@ public struct ZImageGenerationRequest: Sendable {
     self.seed = seed
     self.outputPath = outputPath
     self.model = model
+    self.weightsVariant = weightsVariant
     self.maxSequenceLength = maxSequenceLength
     self.lora = lora
     self.enhancePrompt = enhancePrompt
@@ -82,6 +85,7 @@ public final class ZImagePipeline {
   private var quantManifest: ZImageQuantizationManifest?
   private var isModelLoaded: Bool = false
   private var loadedModelId: String?
+  private var loadedWeightsVariant: String?
   private var currentLoRA: LoRAWeights?
   private var currentLoRAConfig: LoRAConfiguration?
   private var modelSnapshot: URL?
@@ -107,6 +111,7 @@ public final class ZImagePipeline {
     quantManifest = nil
     isModelLoaded = false
     loadedModelId = nil
+    loadedWeightsVariant = nil
 
     currentLoRA = nil
     currentLoRAConfig = nil
@@ -323,7 +328,7 @@ public final class ZImagePipeline {
     guard activeAIOCheckpointURL == nil else { return }
     guard let transformer, let snapshot = modelSnapshot, let configs = modelConfigs else { throw PipelineError.modelNotLoaded }
 
-    let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
+    let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
     let baseTransformerWeights = try weightsMapper.loadTransformer()
     ZImageWeightsMapping.applyTransformer(weights: baseTransformerWeights, to: transformer, manifest: nil, logger: logger)
 
@@ -372,15 +377,27 @@ public final class ZImagePipeline {
   public typealias ProgressHandler = (GenerationProgress) -> Void
   public func loadModel(
     modelSpec: String? = nil,
+    weightsVariant: String? = nil,
     aioCheckpointURL: URL? = nil,
     aioTextEncoderPrefix: String? = nil,
     progressHandler: ProgressHandler? = nil
   ) async throws {
+    let normalizedWeightsVariant: String? = {
+      guard let weightsVariant else { return nil }
+      let trimmed = weightsVariant.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed.lowercased()
+    }()
+
     let modelId = modelSpec ?? ZImageRepository.id
     let normalizedAIOPath = aioCheckpointURL?.standardizedFileURL.path
     let currentAIOPath = activeAIOCheckpointURL?.standardizedFileURL.path
     let hasLoadedComponents = tokenizer != nil && textEncoder != nil && transformer != nil && vae != nil && modelConfigs != nil && modelSnapshot != nil
-    if isModelLoaded, loadedModelId == modelId, normalizedAIOPath == currentAIOPath, hasLoadedComponents {
+    if isModelLoaded,
+       loadedModelId == modelId,
+       loadedWeightsVariant == normalizedWeightsVariant,
+       normalizedAIOPath == currentAIOPath,
+       hasLoadedComponents
+    {
       logger.info("Model already loaded, skipping load")
       return
     }
@@ -388,8 +405,11 @@ public final class ZImagePipeline {
       && loadedModelId != modelId
       && currentAIOPath == nil
       && normalizedAIOPath == nil
+      && loadedWeightsVariant == normalizedWeightsVariant
       && areZImageVariants(loadedModelId ?? "", modelId)
-    if isModelLoaded, loadedModelId != modelId || normalizedAIOPath != currentAIOPath {
+    if isModelLoaded,
+       loadedModelId != modelId || normalizedAIOPath != currentAIOPath || loadedWeightsVariant != normalizedWeightsVariant
+    {
       if canPreserveSharedComponents {
         logger.info("Switching Z-Image variant, preserving VAE and tokenizer")
 
@@ -409,7 +429,25 @@ public final class ZImagePipeline {
     progressHandler?(GenerationProgress(stage: .loadingModel, stepIndex: 0, totalSteps: 1))
 
     let snapshotFilePatterns: [String]? = aioCheckpointURL == nil ? nil : PipelineSnapshot.configAndTokenizerFilePatterns
-    let snapshot = try await PipelineSnapshot.prepare(model: modelSpec, filePatterns: snapshotFilePatterns, logger: logger)
+    let shouldValidateWeightsForCache = snapshotFilePatterns == nil
+    let snapshotValidator: (@Sendable (URL) -> Bool)?
+    if shouldValidateWeightsForCache, let normalizedWeightsVariant {
+      snapshotValidator = { [logger] snapshot in
+        !ZImageFiles.resolveTransformerWeights(at: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger).isEmpty
+          && !ZImageFiles.resolveTextEncoderWeights(at: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger).isEmpty
+          && !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger).isEmpty
+      }
+    } else {
+      snapshotValidator = nil
+    }
+
+    let snapshot = try await PipelineSnapshot.prepare(
+      model: modelSpec,
+      weightsVariant: normalizedWeightsVariant,
+      filePatterns: snapshotFilePatterns,
+      snapshotValidator: snapshotValidator,
+      logger: logger
+    )
     let configs = try ZImageModelConfigs.load(from: snapshot)
     if tokenizer == nil {
       progressHandler?(GenerationProgress(stage: .encodingText, stepIndex: 0, totalSteps: 1))
@@ -488,12 +526,31 @@ public final class ZImagePipeline {
             logger.warning("AIO VAE decoder weights have incompatible shapes (coverage \(percent)%), falling back to base VAE weights.")
           }
 
+          let vaeSnapshotValidator: (@Sendable (URL) -> Bool)?
+          if let normalizedWeightsVariant {
+            vaeSnapshotValidator = { [logger] snapshot in
+              !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger).isEmpty
+            }
+          } else {
+            vaeSnapshotValidator = nil
+          }
           let baseVAESnapshot = try await PipelineSnapshot.prepare(
             model: modelSpec,
-            filePatterns: PipelineSnapshot.vaeOnlyFilePatterns,
+            weightsVariant: normalizedWeightsVariant,
+            filePatterns: PipelineSnapshot.vaeOnlyFilePatterns(weightsVariant: normalizedWeightsVariant),
+            snapshotValidator: vaeSnapshotValidator,
             logger: logger
           )
-          let weightsMapper = ZImageWeightsMapper(snapshot: baseVAESnapshot, logger: logger)
+          if let normalizedWeightsVariant,
+             ZImageFiles.resolveVAEWeights(at: baseVAESnapshot, weightsVariant: normalizedWeightsVariant, logger: logger).isEmpty
+          {
+            throw ZImageFiles.WeightsVariantError.missingRequiredComponentWeights(
+              weightsVariant: normalizedWeightsVariant,
+              missingComponents: ["vae"],
+              snapshot: baseVAESnapshot
+            )
+          }
+          let weightsMapper = ZImageWeightsMapper(snapshot: baseVAESnapshot, weightsVariant: normalizedWeightsVariant, logger: logger)
           let baseVAEWeights = try weightsMapper.loadVAE()
           let baseDecoderWeights = baseVAEWeights.filter { $0.key.hasPrefix("decoder.") }
           ZImageWeightsMapping.applyVAE(weights: baseDecoderWeights, to: v, manifest: nil, logger: logger)
@@ -503,8 +560,11 @@ public final class ZImagePipeline {
         logger.info("Reusing cached VAE")
       }
     } else {
-      let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, logger: logger)
+      let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger)
       let manifest = weightsMapper.loadQuantizationManifest()
+      if manifest == nil {
+        try ZImageFiles.validateRequiredComponentWeights(at: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger)
+      }
 
       if let m = manifest {
         logger.info("Loading quantized model (bits=\(m.bits), group_size=\(m.groupSize))")
@@ -541,6 +601,7 @@ public final class ZImagePipeline {
     modelSnapshot = snapshot
     isModelLoaded = true
     loadedModelId = modelId
+    loadedWeightsVariant = normalizedWeightsVariant
 
     logger.info("Model loaded successfully and cached in memory")
   }
@@ -620,6 +681,7 @@ public final class ZImagePipeline {
     let selection = resolveModelSelection(request.model, forceTransformerOverrideOnly: request.forceTransformerOverrideOnly)
     try await loadModel(
       modelSpec: selection.baseModelSpec,
+      weightsVariant: request.weightsVariant,
       aioCheckpointURL: selection.aioCheckpointURL,
       aioTextEncoderPrefix: selection.aioTextEncoderPrefix,
       progressHandler: progressHandler
