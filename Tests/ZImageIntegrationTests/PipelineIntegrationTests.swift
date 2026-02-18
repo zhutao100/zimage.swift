@@ -1,24 +1,20 @@
-import XCTest
-import MLX
-import Hub
 import Logging
+import MLX
+import XCTest
 @testable import ZImage
 
 /// Integration tests for ZImagePipeline using real model inference.
 /// These tests require downloading the 8-bit quantized model (~7.5GB).
 /// Run with: xcodebuild test -scheme zimage.swift-Package -destination 'platform=macOS' -only-testing:ZImageIntegrationTests/PipelineIntegrationTests -parallel-testing-enabled NO
 final class PipelineIntegrationTests: XCTestCase {
-
   /// Shared pipeline instance to avoid reloading model for each test
-  private static var sharedPipeline: ZImagePipeline?
+  private nonisolated(unsafe) static var sharedPipeline: ZImagePipeline?
 
   /// Project root directory (derived from test file location)
-  private static let projectRoot: URL = {
-    URL(fileURLWithPath: #file)
-      .deletingLastPathComponent()  // Remove PipelineIntegrationTests.swift
-      .deletingLastPathComponent()  // Remove ZImageIntegrationTests
-      .deletingLastPathComponent()  // Remove Tests -> project root
-  }()
+  private static let projectRoot: URL = URL(fileURLWithPath: #file)
+    .deletingLastPathComponent() // Remove PipelineIntegrationTests.swift
+    .deletingLastPathComponent() // Remove ZImageIntegrationTests
+    .deletingLastPathComponent() // Remove Tests -> project root
 
   /// Output directory for test-generated images (inside project)
   private static let outputDir: URL = {
@@ -257,10 +253,8 @@ final class PipelineIntegrationTests: XCTestCase {
 
   /// Helper to load model snapshot for testing
   private func loadSnapshot() async throws -> URL {
-    let hubApi = HubApi.shared
-    let repo = Hub.Repo(id: "mzbac/z-image-turbo-8bit")
     let filePatterns = ["*.json", "*.safetensors", "tokenizer/*"]
-    return try await hubApi.snapshot(from: repo, matching: filePatterns)
+    return try await ModelResolution.resolve(modelSpec: "mzbac/z-image-turbo-8bit", filePatterns: filePatterns)
   }
 
   // MARK: - Helper Functions

@@ -44,7 +44,7 @@ Source of truth: `Sources/ZImage/Weights/ModelResolution.swift` (`getHuggingFace
 
 ## Authentication (Gated / Private Repos)
 
-The underlying Hugging Face client (`HubApi` from `swift-transformers`) supports auth tokens via common conventions, including:
+The underlying Hugging Face client (`HubClient` from `swift-huggingface`) supports auth tokens via common conventions, including:
 
 - `HF_TOKEN`
 - `HUGGING_FACE_HUB_TOKEN`

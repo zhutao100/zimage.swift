@@ -2,7 +2,6 @@
 
 import Dispatch
 import Foundation
-import Hub
 import Logging
 import MLX
 import MLXNN
@@ -170,7 +169,6 @@ public class ZImageControlPipeline {
   }
 
   private var logger: Logger
-  private let hubApi: HubApi
   private var tokenizer: QwenTokenizer?
   private var textEncoder: QwenTextEncoder?
   private var vae: AutoencoderKL?
@@ -195,9 +193,8 @@ public class ZImageControlPipeline {
   }
 
   private var cachedPromptEmbedding: CachedPromptEmbedding?
-  public init(logger: Logger = Logger(label: "z-image.control-pipeline"), hubApi: HubApi = .shared) {
+  public init(logger: Logger = Logger(label: "z-image.control-pipeline")) {
     self.logger = logger
-    self.hubApi = hubApi
   }
 
   private func clearControlnetWeights() {
@@ -295,7 +292,7 @@ public class ZImageControlPipeline {
 
   private func loadTokenizer(snapshot: URL) throws -> QwenTokenizer {
     let tokDir = snapshot.appending(path: "tokenizer")
-    return try QwenTokenizer.load(from: tokDir, hubApi: hubApi)
+    return try QwenTokenizer.load(from: tokDir)
   }
 
   private func loadTextEncoder(snapshot _: URL, config: ZImageTextEncoderConfig) throws -> QwenTextEncoder {
@@ -411,8 +408,7 @@ public class ZImageControlPipeline {
     let encodedLatents = vae.encode(normalized)
     let latentChannels = vaeConfig.latentChannels
     let latents = encodedLatents[0..., 0 ..< latentChannels, 0..., 0...]
-    let normalizedLatents = (latents - vaeConfig.shiftFactor) * vaeConfig.scalingFactor
-    return normalizedLatents
+    return (latents - vaeConfig.shiftFactor) * vaeConfig.scalingFactor
   }
 
   private func convertToRGBA(_ image: CGImage) -> CGImage? {
@@ -455,8 +451,7 @@ public class ZImageControlPipeline {
       throw PipelineError.controlImageLoadFailed("Mask array has wrong dimensions: \(maskArray.shape)")
     }
     let grayscale = MLX.mean(maskArray, axis: 1, keepDims: true)
-    let binarized = MLX.where(grayscale .>= 0.5, MLXArray(Float(1.0)), MLXArray(Float(0.0)))
-    return binarized
+    return MLX.where(grayscale .>= 0.5, MLXArray(Float(1.0)), MLXArray(Float(0.0)))
   }
 
   private func buildControlContext(
@@ -543,8 +538,7 @@ public class ZImageControlPipeline {
       maskCondition = MLXArray.zeros([1, 1, latentH, latentW])
     }
     let combined = MLX.concatenated([controlLatents, maskCondition, inpaintLatents], axis: 1)
-    let controlContext = MLX.expandedDimensions(combined, axis: 2)
-    return controlContext
+    return MLX.expandedDimensions(combined, axis: 2)
   }
 
   private func loadControlImage(
@@ -1471,11 +1465,10 @@ public class ZImageControlPipeline {
       return try loadControlnetFromDirectory(snapshot, dtype: dtype, preferredFile: preferredFile)
     }
     throw PipelineError.weightsMissing("""
-      Invalid controlnet spec: \(controlnetSpec).
-       Provide a local .safetensors path, directory,
-      or HuggingFace model ID (e.g., alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1)
-      """
-    )
+    Invalid controlnet spec: \(controlnetSpec).
+     Provide a local .safetensors path, directory,
+    or HuggingFace model ID (e.g., alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1)
+    """)
   }
 
   private func loadControlnetFromDirectory(_ directory: URL, dtype: DType, preferredFile: String? = nil) throws -> ControlnetWeightsResult {

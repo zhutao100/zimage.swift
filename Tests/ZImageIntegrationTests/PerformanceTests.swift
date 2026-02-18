@@ -1,22 +1,19 @@
-import XCTest
 import MLX
+import XCTest
 @testable import ZImage
 
 /// Performance tests for Z-Image pipeline.
 /// Tracks inference time, memory usage, and per-component breakdown.
 /// Run with: xcodebuild test -scheme zimage.swift-Package -destination 'platform=macOS' -only-testing:ZImageIntegrationTests/PerformanceTests -parallel-testing-enabled NO
 final class PerformanceTests: XCTestCase {
-
   /// Shared pipeline instance to avoid reloading model for each test
-  private static var sharedPipeline: ZImagePipeline?
+  private nonisolated(unsafe) static var sharedPipeline: ZImagePipeline?
 
   /// Project root directory (derived from test file location)
-  private static let projectRoot: URL = {
-    URL(fileURLWithPath: #file)
-      .deletingLastPathComponent()  // Remove PerformanceTests.swift
-      .deletingLastPathComponent()  // Remove ZImageIntegrationTests
-      .deletingLastPathComponent()  // Remove Tests -> project root
-  }()
+  private static let projectRoot: URL = URL(fileURLWithPath: #file)
+    .deletingLastPathComponent() // Remove PerformanceTests.swift
+    .deletingLastPathComponent() // Remove ZImageIntegrationTests
+    .deletingLastPathComponent() // Remove Tests -> project root
 
   /// Output directory for test-generated images (inside project)
   private static let outputDir: URL = {
@@ -81,7 +78,7 @@ final class PerformanceTests: XCTestCase {
     }
   }
 
-  // Baseline performance expectations (can be adjusted based on hardware)
+  /// Baseline performance expectations (can be adjusted based on hardware)
   static let baselineMetrics = PerformanceMetrics(
     totalInferenceTime: 60.0, // 60 seconds max for 9 steps at 1024x1024
     textEncodingTime: 5.0,
@@ -145,7 +142,7 @@ final class PerformanceTests: XCTestCase {
     // Generate multiple images and check memory doesn't leak
     var memoryReadings: [UInt64] = []
 
-    for i in 0..<3 {
+    for i in 0 ..< 3 {
       let metrics = try await measureGeneration(
         pipeline: pipeline,
         prompt: "memory test \(i)",
@@ -163,7 +160,7 @@ final class PerformanceTests: XCTestCase {
     // Memory shouldn't grow unboundedly
     if memoryReadings.count >= 2 {
       let firstReading = memoryReadings[0]
-      let lastReading = memoryReadings.last!
+      let lastReading = try XCTUnwrap(memoryReadings.last)
 
       // Last reading shouldn't be more than 50% higher than first
       XCTAssertLessThan(
@@ -216,7 +213,7 @@ final class PerformanceTests: XCTestCase {
     metrics.vaeDecodingTime = metrics.totalInferenceTime * 0.10
 
     // Estimate per-step latency
-    metrics.perStepLatency = (0..<steps).map { _ in metrics.transformerTime / Double(steps) }
+    metrics.perStepLatency = (0 ..< steps).map { _ in metrics.transformerTime / Double(steps) }
 
     // Get memory usage
     metrics.peakMemoryUsage = getMemoryUsage()

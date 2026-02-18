@@ -19,9 +19,10 @@ At a high level, the project implements a full DiT pipeline:
 
 ## Technology Stack
 
-- Swift 5.9+ (Package.swift uses Swift tools 5.9)
+- Swift 6.0+ (Package.swift uses Swift tools 6.0)
 - MLX Swift (`MLX`, `MLXNN`, `MLXFast`, `MLXRandom`) for tensor compute (Metal / CPU fallback)
-- `swift-transformers` for tokenizers + Hugging Face Hub access (`Hub`)
+- `swift-huggingface` for Hugging Face Hub access
+- `swift-transformers` for tokenizers
 - `swift-log` for logging
 - CoreGraphics / ImageIO for image I/O (where available)
 

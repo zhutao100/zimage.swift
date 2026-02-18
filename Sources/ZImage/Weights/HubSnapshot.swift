@@ -1,10 +1,38 @@
 import Foundation
-import Hub
+import HuggingFace
+
+public enum HubRepoType: String, Sendable {
+  case models
+  case datasets
+  case spaces
+
+  var kind: Repo.Kind {
+    switch self {
+    case .models:
+      return .model
+    case .datasets:
+      return .dataset
+    case .spaces:
+      return .space
+    }
+  }
+}
+
+public enum HubSnapshotError: Error, LocalizedError, Sendable {
+  case fileNotFound(String)
+
+  public var errorDescription: String? {
+    switch self {
+    case let .fileNotFound(path):
+      return "File not found in snapshot: \(path)"
+    }
+  }
+}
 
 public struct HubSnapshotOptions {
   public var repoId: String
   public var revision: String
-  public var repoType: Hub.RepoType
+  public var repoType: HubRepoType
   public var patterns: [String]
   public var cacheDirectory: URL?
   public var hfToken: String?
@@ -14,7 +42,7 @@ public struct HubSnapshotOptions {
   public init(
     repoId: String,
     revision: String = "main",
-    repoType: Hub.RepoType = .models,
+    repoType: HubRepoType = .models,
     patterns: [String] = [],
     cacheDirectory: URL? = nil,
     hfToken: String? = nil,
@@ -39,12 +67,12 @@ public struct HubSnapshotProgress: Sendable {
   public let estimatedSpeedBytesPerSecond: Double?
 
   init(progress: Progress, speed: Double?) {
-    self.fractionCompleted = progress.totalUnitCount > 0
+    fractionCompleted = progress.totalUnitCount > 0
       ? Double(progress.completedUnitCount) / Double(progress.totalUnitCount)
       : 0
-    self.completedUnitCount = progress.completedUnitCount
-    self.totalUnitCount = progress.totalUnitCount
-    self.estimatedSpeedBytesPerSecond = speed
+    completedUnitCount = progress.completedUnitCount
+    totalUnitCount = progress.totalUnitCount
+    estimatedSpeedBytesPerSecond = speed
   }
 }
 
@@ -52,44 +80,38 @@ public actor HubSnapshot {
   public typealias ProgressHandler = @Sendable (HubSnapshotProgress) -> Void
 
   private let options: HubSnapshotOptions
-  private let hubApi: HubApi
   private var cachedSnapshotURL: URL?
+  private let resolvedCacheDirectory: URL
 
   public init(
-    options: HubSnapshotOptions,
-    hubApi: HubApi? = nil
+    options: HubSnapshotOptions
   ) throws {
     self.options = options
 
-    let cacheDirectory = try HubSnapshot.resolveCacheDirectory(
+    resolvedCacheDirectory = try HubSnapshot.resolveCacheDirectory(
       requested: options.cacheDirectory,
       fileManager: FileManager.default
     )
-
-    let api = hubApi ?? HubApi(
-      downloadBase: cacheDirectory,
-      hfToken: options.hfToken,
-      useBackgroundSession: options.useBackgroundSession,
-      useOfflineMode: options.offline ? true : nil
-    )
-
-    self.hubApi = api
   }
 
   public func prepare(progressHandler: ProgressHandler? = nil) async throws -> URL {
     if let cachedSnapshotURL,
-      FileManager.default.fileExists(atPath: cachedSnapshotURL.path) {
+       FileManager.default.fileExists(atPath: cachedSnapshotURL.path)
+    {
       return cachedSnapshotURL
     }
 
-    let repo = Hub.Repo(id: options.repoId, type: options.repoType)
-    let patterns = options.patterns
-    let snapshotURL = try await hubApi.snapshot(
-      from: repo,
+    let snapshotURL = try await HuggingFaceHub.ensureSnapshot(
+      repoId: options.repoId,
+      kind: options.repoType.kind,
       revision: options.revision,
-      matching: patterns,
-      progressHandler: { progress, speed in
-        progressHandler?(HubSnapshotProgress(progress: progress, speed: speed))
+      matching: options.patterns,
+      cacheDirectory: resolvedCacheDirectory,
+      hfToken: options.hfToken,
+      offline: options.offline,
+      useBackgroundSession: options.useBackgroundSession,
+      progressHandler: { progress in
+        progressHandler?(HubSnapshotProgress(progress: progress, speed: nil))
       }
     )
     cachedSnapshotURL = snapshotURL
@@ -103,7 +125,7 @@ public actor HubSnapshot {
     let snapshot = try await prepare(progressHandler: progressHandler)
     let url = snapshot.appending(path: relativePath)
     guard FileManager.default.fileExists(atPath: url.path) else {
-      throw Hub.HubClientError.fileNotFound(relativePath)
+      throw HubSnapshotError.fileNotFound(relativePath)
     }
     return url
   }

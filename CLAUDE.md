@@ -69,4 +69,4 @@ xcodebuild test -scheme zimage.swift-Package -destination 'platform=macOS' -enab
 
 - macOS 14.0+ / iOS 16+
 - Apple Silicon
-- Swift 5.9+
+- Swift 6.0+

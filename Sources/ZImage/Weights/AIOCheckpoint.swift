@@ -3,14 +3,13 @@ import Logging
 import MLX
 
 enum ZImageAIOCheckpoint {
-
   struct Inspection: Sendable {
     let isAIO: Bool
     let textEncoderPrefix: String?
     let diagnostics: [String]
   }
 
-  struct Components: Sendable {
+  struct Components {
     let transformer: [String: MLXArray]
     let textEncoder: [String: MLXArray]
     let vae: [String: MLXArray]
@@ -137,7 +136,7 @@ enum ZImageAIOCheckpoint {
       out[mapped] = canonicalTensor
     }
 
-    if looksComfy && !looksDiffusers {
+    if looksComfy, !looksDiffusers {
       logger?.info("Canonicalized ComfyUI VAE keys -> rewritten \(rewritten)/\(weights.count) tensors (upBlocks=\(upBlocks), squeezed=\(squeezed))")
     } else if squeezed > 0 {
       logger?.info("Canonicalized VAE decoder tensor shapes -> squeezed \(squeezed)/\(weights.count) tensors")
@@ -234,7 +233,7 @@ enum ZImageAIOCheckpoint {
 
       // decoder.mid.block_1.* -> decoder.mid_block.resnets.0.*
       // decoder.mid.block_2.* -> decoder.mid_block.resnets.1.*
-      if (parts[2] == "block_1" || parts[2] == "block_2"), parts.count >= 5 {
+      if parts[2] == "block_1" || parts[2] == "block_2", parts.count >= 5 {
         let resnetIndex = parts[2] == "block_1" ? "0" : "1"
         let tail = parts[3...].map(String.init).joined(separator: ".")
         return ["decoder", "mid_block", "resnets", resnetIndex, tail].joined(separator: ".")

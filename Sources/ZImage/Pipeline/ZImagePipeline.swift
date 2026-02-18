@@ -1,6 +1,5 @@
 import Dispatch
 import Foundation
-import Hub
 import Logging
 import MLX
 import MLXNN
@@ -76,7 +75,6 @@ public final class ZImagePipeline {
   }
 
   private var logger: Logger
-  private let hubApi: HubApi
   private var tokenizer: QwenTokenizer?
   private var textEncoder: QwenTextEncoder?
   private var transformer: ZImageTransformer2DModel?
@@ -93,9 +91,8 @@ public final class ZImagePipeline {
   private var activeTransformerOverrideURL: URL?
   private var activeAIOCheckpointURL: URL?
 
-  public init(logger: Logger = Logger(label: "z-image.pipeline"), hubApi: HubApi = .shared) {
+  public init(logger: Logger = Logger(label: "z-image.pipeline")) {
     self.logger = logger
-    self.hubApi = hubApi
   }
 
   public var isLoaded: Bool {
@@ -167,7 +164,7 @@ public final class ZImagePipeline {
 
   private func loadTokenizer(snapshot: URL) throws -> QwenTokenizer {
     let tokDir = snapshot.appending(path: "tokenizer")
-    return try QwenTokenizer.load(from: tokDir, hubApi: hubApi)
+    return try QwenTokenizer.load(from: tokDir)
   }
 
   private func loadTextEncoder(snapshot _: URL, config: ZImageTextEncoderConfig) throws -> QwenTextEncoder {
@@ -861,8 +858,8 @@ public final class ZImagePipeline {
     return nil
   }
 
-  // Canonicalize override checkpoints so their tensor keys match our transformer module names.
-  // Supports SD/ComfyUI-style exports that prefix keys with e.g. "model.diffusion_model.".
+  /// Canonicalize override checkpoints so their tensor keys match our transformer module names.
+  /// Supports SD/ComfyUI-style exports that prefix keys with e.g. "model.diffusion_model.".
   func canonicalizeTransformerOverride(_ weights: [String: MLXArray], dim: Int, logger: Logger) -> [String: MLXArray] {
     var out: [String: MLXArray] = [:]
     for (k, v) in weights {
@@ -959,12 +956,11 @@ public final class ZImagePipeline {
       let missingSample = audit.missing.prefix(10).joined(separator: ", ")
       let suffix = audit.missing.count > 10 ? ", ..." : ""
       throw PipelineError.weightsMissing("""
-        AIO transformer weights coverage too low:
-         matched \(audit.matched)/\(total) (\(percent)%).
-         Missing (sample): \(missingSample)\(suffix).
-         Use --force-transformer-override-only to treat it as transformer-only.
-        """
-      )
+      AIO transformer weights coverage too low:
+       matched \(audit.matched)/\(total) (\(percent)%).
+       Missing (sample): \(missingSample)\(suffix).
+       Use --force-transformer-override-only to treat it as transformer-only.
+      """)
     }
   }
 }

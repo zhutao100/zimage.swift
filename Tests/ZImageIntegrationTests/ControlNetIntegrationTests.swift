@@ -1,19 +1,19 @@
-import XCTest
 import MLX
+import XCTest
 @testable import ZImage
 
 #if canImport(CoreGraphics)
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
+
 final class ControlNetIntegrationTests: XCTestCase {
-  private static var sharedPipeline: ZImageControlPipeline?
-  private static let projectRoot: URL = {
-    URL(fileURLWithPath: #file)
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-  }()
+  private nonisolated(unsafe) static var sharedPipeline: ZImageControlPipeline?
+  private static let projectRoot: URL = URL(fileURLWithPath: #file)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+
   private static let outputDir: URL = {
     let url = projectRoot
       .appendingPathComponent("Tests")
@@ -22,6 +22,7 @@ final class ControlNetIntegrationTests: XCTestCase {
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }()
+
   override class func setUp() {
     super.setUp()
 
@@ -31,12 +32,12 @@ final class ControlNetIntegrationTests: XCTestCase {
   }
 
   override class func tearDown() {
-
     sharedPipeline = nil
 
     try? FileManager.default.removeItem(at: outputDir)
     super.tearDown()
   }
+
   private func getPipeline() throws -> ZImageControlPipeline {
     guard let pipeline = Self.sharedPipeline else {
       throw XCTSkip("Pipeline not available (likely CI environment)")
@@ -151,7 +152,8 @@ final class ControlNetIntegrationTests: XCTestCase {
     let outputURL = try await pipeline.generate(request)
     XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
     guard let imageSource = CGImageSourceCreateWithURL(outputURL as CFURL, nil),
-          let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+          let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil)
+    else {
       XCTFail("Failed to load output image")
       return
     }
@@ -161,7 +163,6 @@ final class ControlNetIntegrationTests: XCTestCase {
   }
 
   private func createCannyEdgeImage() throws -> URL {
-
     let width = 512
     let height = 512
 
@@ -196,7 +197,6 @@ final class ControlNetIntegrationTests: XCTestCase {
   }
 
   private func createDepthMapImage() throws -> URL {
-
     let width = 512
     let height = 512
 
@@ -214,7 +214,7 @@ final class ControlNetIntegrationTests: XCTestCase {
     ) else {
       throw TestError.contextCreationFailed
     }
-    for y in 0..<height {
+    for y in 0 ..< height {
       let depth = CGFloat(y) / CGFloat(height)
       context.setFillColor(CGColor(red: depth, green: depth, blue: depth, alpha: 1))
       context.fill(CGRect(x: 0, y: y, width: width, height: 1))
@@ -228,7 +228,6 @@ final class ControlNetIntegrationTests: XCTestCase {
   }
 
   private func createPoseImage() throws -> URL {
-
     let width = 512
     let height = 512
 

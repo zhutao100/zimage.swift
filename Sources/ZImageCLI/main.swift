@@ -19,7 +19,9 @@ LoggingSystem.bootstrap { label in
 
 private final class Box<T>: @unchecked Sendable {
   var value: T
-  init(_ value: T) { self.value = value }
+  init(_ value: T) {
+    self.value = value
+  }
 }
 
 enum ZImageCLI {
@@ -150,7 +152,7 @@ enum ZImageCLI {
     )
 
     let pipeline = ZImagePipeline(logger: logger)
-    nonisolated(unsafe) let semaphore = DispatchSemaphore(value: 0)
+    let semaphore = DispatchSemaphore(value: 0)
     let useBar = !noProgress && (isatty(STDERR_FILENO) != 0)
     let bar = useBar ? ProgressBar(total: steps) : nil
     Task {
@@ -374,7 +376,7 @@ enum ZImageCLI {
     print("Quantizing ControlNet: \(inputPath) -> \(outputPath)")
     print("Config: \(bits)-bit, group_size=\(groupSize)")
 
-    nonisolated(unsafe) let semaphore = DispatchSemaphore(value: 0)
+    let semaphore = DispatchSemaphore(value: 0)
     let errorBox = Box<Error?>(nil)
     let capturedVerbose = verbose
     let capturedSpecificFile = specificFile
@@ -616,7 +618,7 @@ enum ZImageCLI {
     )
 
     let pipeline = ZImageControlPipeline(logger: logger)
-    nonisolated(unsafe) let semaphore = DispatchSemaphore(value: 0)
+    let semaphore = DispatchSemaphore(value: 0)
     let finalOutputPath = outputPath
     Task {
       do {
@@ -709,8 +711,9 @@ enum ZImageCLI {
 
 // MARK: - Progress Helpers
 
-private final class PlainProgress {
+private final class PlainProgress: @unchecked Sendable {
   static let shared = PlainProgress()
+  private let lock = NSLock()
   private var lastPercent: Int = -1
   private var lastEmitTime: Date = .distantPast
 
@@ -718,11 +721,19 @@ private final class PlainProgress {
     guard total > 0 else { return }
     let now = Date()
     let percent = Int((Double(completed) / Double(total)) * 100.0)
+    let shouldEmit: Bool
+    lock.lock()
     if percent != lastPercent || now.timeIntervalSince(lastEmitTime) >= 0.5 {
-      FileHandle.standardError.write("Step \(completed)/\(total) (\(percent)%)\n".data(using: .utf8)!)
       lastPercent = percent
       lastEmitTime = now
+      shouldEmit = true
+    } else {
+      shouldEmit = false
     }
+    lock.unlock()
+
+    guard shouldEmit else { return }
+    FileHandle.standardError.write("Step \(completed)/\(total) (\(percent)%)\n".data(using: .utf8)!)
   }
 }
 
@@ -734,7 +745,9 @@ private final class ProgressBar {
   private var lastRenderedPercent: Int = -1
   private var isFinished: Bool = false
 
-  init(total: Int) { self.total = max(1, total) }
+  init(total: Int) {
+    self.total = max(1, total)
+  }
 
   func update(completed: Int) {
     if isFinished { return }

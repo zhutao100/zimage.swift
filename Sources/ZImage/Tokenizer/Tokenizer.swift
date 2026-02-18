@@ -1,7 +1,7 @@
 import Foundation
+import Hub
 import MLX
 import Tokenizers
-import Hub
 
 public enum QwenTokenizerError: Error {
   case directoryNotFound(URL)
@@ -21,7 +21,7 @@ public struct QwenTokenBatch {
 }
 
 public final class QwenTokenizer {
-  private let encodeFunction: @Sendable (String) -> [Int]
+  private let encodeFunction: (String) -> [Int]
   private let prefixTokens: [Int]
   private let suffixTokens: [Int]
   private let tokenizer: Tokenizer
@@ -45,7 +45,7 @@ public final class QwenTokenizer {
     imageTokenId: Int? = nil,
     visionStartTokenId: Int? = nil,
     visionEndTokenId: Int? = nil,
-    encode: @escaping @Sendable (String) -> [Int]
+    encode: @escaping (String) -> [Int]
   ) {
     self.padTokenId = padTokenId
     self.maxLength = maxLength
@@ -55,13 +55,12 @@ public final class QwenTokenizer {
     self.imageTokenId = imageTokenId
     self.visionStartTokenId = visionStartTokenId
     self.visionEndTokenId = visionEndTokenId
-    self.encodeFunction = encode
+    encodeFunction = encode
   }
 
   public static func load(
     from directory: URL,
-    maxLengthOverride: Int? = nil,
-    hubApi: HubApi = .shared
+    maxLengthOverride: Int? = nil
   ) throws -> QwenTokenizer {
     let tokenizerDirectory = resolveTokenizerDirectory(directory)
     let tokenizerConfigURL = tokenizerDirectory.appending(path: "tokenizer_config.json")
@@ -74,12 +73,13 @@ public final class QwenTokenizer {
       throw QwenTokenizerError.fileNotFound(tokenizerConfigURL)
     }
 
-    let tokenizerConfig = try hubApi.configuration(fileURL: tokenizerConfigURL)
+    let tokenizerConfig = try decodeConfig(fileURL: tokenizerConfigURL)
     let addedTokensURL = tokenizerDirectory.appending(path: "added_tokens.json")
     var addedTokens: [String: Int] = [:]
     if FileManager.default.fileExists(atPath: addedTokensURL.path) {
       if let addedData = try? Data(contentsOf: addedTokensURL),
-         let addedObject = try? JSONSerialization.jsonObject(with: addedData, options: []) as? [String: Any] {
+         let addedObject = try? JSONSerialization.jsonObject(with: addedData, options: []) as? [String: Any]
+      {
         for (token, value) in addedObject {
           if let index = value as? Int {
             addedTokens[token] = index
@@ -90,14 +90,14 @@ public final class QwenTokenizer {
 
     let tokenizer: Tokenizer
     if FileManager.default.fileExists(atPath: tokenizerDataURL.path) {
-      let tokenizerData = try hubApi.configuration(fileURL: tokenizerDataURL)
+      let tokenizerData = try decodeConfig(fileURL: tokenizerDataURL)
       tokenizer = try AutoTokenizer.from(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData)
     } else {
-
       let vocabURL = tokenizerDirectory.appending(path: "vocab.json")
       let mergesURL = tokenizerDirectory.appending(path: "merges.txt")
       guard FileManager.default.fileExists(atPath: vocabURL.path),
-            FileManager.default.fileExists(atPath: mergesURL.path) else {
+            FileManager.default.fileExists(atPath: mergesURL.path)
+      else {
         throw QwenTokenizerError.fileNotFound(tokenizerDataURL)
       }
       let tokenizerData = try makeBPETokenizerData(vocabURL: vocabURL, mergesURL: mergesURL)
@@ -135,6 +135,11 @@ public final class QwenTokenizer {
     }
   }
 
+  private static func decodeConfig(fileURL: URL) throws -> Config {
+    let data = try Data(contentsOf: fileURL)
+    return try JSONDecoder().decode(Config.self, from: data)
+  }
+
   private static func makeBPETokenizerData(vocabURL: URL, mergesURL: URL) throws -> Config {
     let vocabData = try Data(contentsOf: vocabURL)
     guard let vocabObject = try JSONSerialization.jsonObject(with: vocabData, options: []) as? [String: Any] else {
@@ -151,7 +156,8 @@ public final class QwenTokenizer {
     var addedTokensMap: [String: Int] = [:]
     if FileManager.default.fileExists(atPath: addedTokensURL.path) {
       if let addedData = try? Data(contentsOf: addedTokensURL),
-         let added = try? JSONSerialization.jsonObject(with: addedData, options: []) as? [String: Any] {
+         let added = try? JSONSerialization.jsonObject(with: addedData, options: []) as? [String: Any]
+      {
         for (k, v) in added {
           if let i = v as? Int {
             vocab[k] = i
@@ -170,17 +176,17 @@ public final class QwenTokenizer {
     var tokenizerDict: [String: Any] = [
       "model": [
         "vocab": vocab,
-        "merges": merges
+        "merges": merges,
       ],
       "preTokenizer": [
         "type": "ByteLevel",
         "addPrefixSpace": false,
         "trimOffsets": true,
-        "useRegex": true
+        "useRegex": true,
       ],
       "decoder": [
-        "type": "ByteLevel"
-      ]
+        "type": "ByteLevel",
+      ],
     ]
 
     if !addedTokensMap.isEmpty {
@@ -192,14 +198,13 @@ public final class QwenTokenizer {
           "content": tok,
           "lstrip": false,
           "rstrip": false,
-          "special": true
+          "special": true,
         ])
       }
       tokenizerDict["addedTokens"] = addedList
     }
     let data = try JSONSerialization.data(withJSONObject: tokenizerDict, options: [])
-    let tokenizerData = try JSONDecoder().decode(Config.self, from: data)
-    return tokenizerData
+    return try JSONDecoder().decode(Config.self, from: data)
   }
 
   public func encode(
@@ -261,7 +266,7 @@ public final class QwenTokenizer {
 
     for prompt in prompts {
       let messages: [[String: Any]] = [
-        ["role": "user", "content": prompt]
+        ["role": "user", "content": prompt],
       ]
       let tokens = try tokenizer.applyChatTemplate(messages: messages)
       let trimmed = Self.trim(tokens, maxLength: targetLength, prefixCount: 0, suffixCount: 0)
@@ -336,7 +341,8 @@ public final class QwenTokenizer {
     var text = ""
     for message in messages {
       guard let role = message["role"] as? String,
-            let content = message["content"] as? String else {
+            let content = message["content"] as? String
+      else {
         continue
       }
       text += "<|im_start|>\(role)\n\(content)<|im_end|>\n"
@@ -366,7 +372,7 @@ public final class QwenTokenizer {
     let contentEnd = max(contentStart, tokens.count - suffixCount)
     let content: [Int]
     if contentEnd > contentStart {
-      content = Array(tokens[contentStart..<contentEnd])
+      content = Array(tokens[contentStart ..< contentEnd])
     } else {
       content = []
     }
@@ -406,16 +412,16 @@ public final class QwenTokenizer {
   }
 
   private static let promptPrefix: String = """
-<|im_start|>system
-Describe the key features of the input image (color, shape, size, texture, objects, background),
-then explain how the user's text instruction should alter or modify the image.
-Generate a new image that meets the user's requirements while maintaining consistency with the
-original input where appropriate.<|im_end|>
-<|im_start|>user
-"""
+  <|im_start|>system
+  Describe the key features of the input image (color, shape, size, texture, objects, background),
+  then explain how the user's text instruction should alter or modify the image.
+  Generate a new image that meets the user's requirements while maintaining consistency with the
+  original input where appropriate.<|im_end|>
+  <|im_start|>user
+  """
 
   private static let promptSuffix: String = """
-<|im_end|>
-<|im_start|>assistant
-"""
+  <|im_end|>
+  <|im_start|>assistant
+  """
 }

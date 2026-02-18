@@ -1,5 +1,5 @@
 import Foundation
-import Hub
+import HuggingFace
 
 public enum ModelResolutionError: Error, LocalizedError {
   case modelNotFound(String)
@@ -136,24 +136,7 @@ public enum ModelResolution {
   }
 
   private static func getHuggingFaceCacheDirectory() -> URL {
-    let env = ProcessInfo.processInfo.environment
-
-    if let hubCache = env["HF_HUB_CACHE"], !hubCache.isEmpty {
-      return URL(fileURLWithPath: hubCache)
-    }
-
-    if let hfHome = env["HF_HOME"], !hfHome.isEmpty {
-      return URL(fileURLWithPath: hfHome).appendingPathComponent("hub")
-    }
-
-    let homeDir = FileManager.default.homeDirectoryForCurrentUser
-    return homeDir.appendingPathComponent(".cache/huggingface/hub")
-  }
-
-  private static func createHubApi() -> HubApi {
-    let hfCacheDir = getHuggingFaceCacheDirectory()
-    try? FileManager.default.createDirectory(at: hfCacheDir, withIntermediateDirectories: true)
-    return HubApi(downloadBase: hfCacheDir)
+    HuggingFaceHub.cacheDirectory()
   }
 
   private static func findCachedModel(
@@ -264,21 +247,24 @@ public enum ModelResolution {
     filePatterns: [String],
     progressHandler: (@Sendable (Progress) -> Void)?
   ) async throws -> URL {
-    let hub = createHubApi()
-
     do {
-      let repo = Hub.Repo(id: modelId)
-      return try await hub.snapshot(
-        from: repo,
+      return try await HuggingFaceHub.ensureSnapshot(
+        repoId: modelId,
         revision: revision,
         matching: filePatterns,
-        progressHandler: progressHandler ?? { _ in }
+        progressHandler: progressHandler
       )
-    } catch Hub.HubClientError.authorizationRequired {
-      throw ModelResolutionError.authorizationRequired(modelId)
     } catch {
-      let nserror = error as NSError
-      if nserror.domain == NSURLErrorDomain && nserror.code == NSURLErrorNotConnectedToInternet {
+      if let clientError = error as? HTTPClientError,
+         case let .responseError(response, _) = clientError,
+         response.statusCode == 401 || response.statusCode == 403
+      {
+        throw ModelResolutionError.authorizationRequired(modelId)
+      }
+
+      if let urlError = error as? URLError,
+         urlError.code == .notConnectedToInternet
+      {
         throw ModelResolutionError.networkUnavailable
       }
       throw ModelResolutionError.downloadFailed(modelId, error)

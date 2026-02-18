@@ -22,7 +22,7 @@ Ships as:
 
 - Apple Silicon
 - macOS 14.0+ (CLI) / iOS 16+ (library target)
-- Swift 5.9+ (CI uses Xcode 16.0)
+- Swift 6.0+ (CI uses Xcode 16.0)
 
 ## Quickstart (CLI)
 
@@ -160,7 +160,8 @@ ControlNet quantization is available via `./ZImageCLI quantize-controlnet ...` (
 ## Dependencies
 
 - [mlx-swift](https://github.com/ml-explore/mlx-swift) - MLX bindings for Swift
-- [swift-transformers](https://github.com/huggingface/swift-transformers) - tokenizers + Hugging Face Hub access
+- [swift-huggingface](https://github.com/huggingface/swift-huggingface) - Hugging Face Hub access
+- [swift-transformers](https://github.com/huggingface/swift-transformers) - tokenizers
 - [swift-log](https://github.com/apple/swift-log) - logging
 
 ## Limitations / Known Gaps
