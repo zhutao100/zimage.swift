@@ -9,7 +9,7 @@ public struct ZImageWeightsMapper {
 
   public init(snapshot: URL, weightsVariant: String? = nil, logger: Logger) {
     self.snapshot = snapshot
-    self.weightsVariant = weightsVariant
+    self.weightsVariant = ZImageFiles.normalizedWeightsVariant(weightsVariant)
     self.logger = logger
   }
 
@@ -86,11 +86,10 @@ public struct ZImageWeightsMapper {
 
   /// Load controlnet weights from a standalone safetensors file
   public func loadControlnetWeights(from path: String, dtype: DType? = .bfloat16) throws -> [String: MLXArray] {
-    let url: URL
-    if path.hasPrefix("/") {
-      url = URL(fileURLWithPath: path)
+    let url: URL = if path.hasPrefix("/") {
+      URL(fileURLWithPath: path)
     } else {
-      url = snapshot.appending(path: path)
+      snapshot.appending(path: path)
     }
 
     guard FileManager.default.fileExists(atPath: url.path) else {

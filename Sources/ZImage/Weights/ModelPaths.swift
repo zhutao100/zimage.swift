@@ -14,11 +14,11 @@ public enum ZImageRepository {
   public static func defaultCacheDirectory(for modelId: String, base: URL = URL(fileURLWithPath: "models")) -> URL {
     switch ZImageModelRegistry.normalizedModelId(from: modelId) {
     case ZImageKnownModel.zImage.id:
-      return base.appendingPathComponent("z-image")
+      base.appendingPathComponent("z-image")
     case ZImageKnownModel.zImageTurbo.id, ZImageKnownModel.zImageTurbo8bit.id, "mzbac/Z-Image-Turbo-8bit":
-      return base.appendingPathComponent("z-image-turbo")
+      base.appendingPathComponent("z-image-turbo")
     default:
-      return base.appendingPathComponent(sanitizeModelIdForCachePath(modelId))
+      base.appendingPathComponent(sanitizeModelIdForCachePath(modelId))
     }
   }
 
@@ -40,7 +40,7 @@ public enum ZImageFiles {
   public static let modelIndex = "model_index.json"
   public static let schedulerConfig = "scheduler/scheduler_config.json"
   public static let transformerConfig = "transformer/config.json"
-  // Legacy defaults for current snapshot; dynamic resolvers should be preferred.
+  /// Legacy defaults for current snapshot; dynamic resolvers should be preferred.
   public static let transformerWeights = [
     "transformer/diffusion_pytorch_model-00001-of-00003.safetensors",
     "transformer/diffusion_pytorch_model-00002-of-00003.safetensors",
@@ -49,7 +49,7 @@ public enum ZImageFiles {
   public static let transformerIndex = "transformer/diffusion_pytorch_model.safetensors.index.json"
 
   public static let textEncoderConfig = "text_encoder/config.json"
-  // Legacy defaults for current snapshot; dynamic resolvers should be preferred.
+  /// Legacy defaults for current snapshot; dynamic resolvers should be preferred.
   public static let textEncoderWeights = [
     "text_encoder/model-00001-of-00003.safetensors",
     "text_encoder/model-00002-of-00003.safetensors",
@@ -66,6 +66,13 @@ public enum ZImageFiles {
 
   public static let vaeConfig = "vae/config.json"
   public static let vaeWeights = ["vae/diffusion_pytorch_model.safetensors"]
+
+  public static func normalizedWeightsVariant(_ weightsVariant: String?) -> String? {
+    guard let weightsVariant else { return nil }
+    let trimmed = weightsVariant.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    return trimmed.lowercased()
+  }
 
   // MARK: - Dynamic weight resolution
 
@@ -197,7 +204,7 @@ public enum ZImageFiles {
 
       let beforeOK = before == nil || isBoundary(before!)
       let afterOK = after == nil || isBoundary(after!)
-      if beforeOK && afterOK { return true }
+      if beforeOK, afterOK { return true }
     }
 
     return false
@@ -212,7 +219,7 @@ public enum ZImageFiles {
     guard let lastDash = stem[..<ofRange.lowerBound].lastIndex(of: "-") else { return stem }
 
     let shardIndex = stem[stem.index(after: lastDash) ..< ofRange.lowerBound]
-    guard !shardIndex.isEmpty, shardIndex.allSatisfy({ $0.isNumber }) else { return stem }
+    guard !shardIndex.isEmpty, shardIndex.allSatisfy(\.isNumber) else { return stem }
 
     let afterOf = stem[ofRange.upperBound...]
     var countEnd = afterOf.startIndex
@@ -234,13 +241,12 @@ public enum ZImageFiles {
   ) -> [String] {
     guard !files.isEmpty else { return [] }
 
-    let filtered: [String]
-    if let weightsVariant, !weightsVariant.isEmpty {
-      filtered = files.filter {
+    let filtered: [String] = if let weightsVariant, !weightsVariant.isEmpty {
+      files.filter {
         matchesWeightsVariant(filename: ($0 as NSString).lastPathComponent, weightsVariant: weightsVariant)
       }
     } else {
-      filtered = files
+      files
     }
 
     guard !filtered.isEmpty else { return [] }

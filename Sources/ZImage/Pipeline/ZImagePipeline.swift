@@ -80,14 +80,12 @@ public final class ZImagePipeline {
   private var transformer: ZImageTransformer2DModel?
   private var vae: VAEImageDecoding?
   private var modelConfigs: ZImageModelConfigs?
-  private var quantManifest: ZImageQuantizationManifest?
   private var isModelLoaded: Bool = false
   private var loadedModelId: String?
   private var loadedWeightsVariant: String?
   private var currentLoRA: LoRAWeights?
   private var currentLoRAConfig: LoRAConfiguration?
   private var modelSnapshot: URL?
-  private var useDynamicLoRA: Bool = false
   private var activeTransformerOverrideURL: URL?
   private var activeAIOCheckpointURL: URL?
 
@@ -96,7 +94,7 @@ public final class ZImagePipeline {
   }
 
   public var isLoaded: Bool {
-    return isModelLoaded
+    isModelLoaded
   }
 
   public func unloadModel() {
@@ -105,7 +103,6 @@ public final class ZImagePipeline {
     transformer = nil
     vae = nil
     modelConfigs = nil
-    quantManifest = nil
     isModelLoaded = false
     loadedModelId = nil
     loadedWeightsVariant = nil
@@ -113,7 +110,6 @@ public final class ZImagePipeline {
     currentLoRA = nil
     currentLoRAConfig = nil
     modelSnapshot = nil
-    useDynamicLoRA = false
     activeTransformerOverrideURL = nil
     activeAIOCheckpointURL = nil
     GPU.clearCache()
@@ -132,7 +128,6 @@ public final class ZImagePipeline {
     }
     currentLoRA = nil
     currentLoRAConfig = nil
-    useDynamicLoRA = false
     GPU.clearCache()
     logger.info("LoRA unloaded (instant)")
   }
@@ -142,24 +137,10 @@ public final class ZImagePipeline {
 
     currentLoRA = nil
     currentLoRAConfig = nil
-    useDynamicLoRA = false
     activeTransformerOverrideURL = nil
 
     GPU.clearCache()
     logger.info("Transformer unloaded for memory optimization")
-  }
-
-  private func getAvailableMemory() -> UInt64 {
-    var stats = vm_statistics64()
-    var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
-    let result = withUnsafeMutablePointer(to: &stats) {
-      $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-        host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
-      }
-    }
-    guard result == KERN_SUCCESS else { return 0 }
-    let pageSize = UInt64(sysconf(_SC_PAGESIZE))
-    return UInt64(stats.free_count) * pageSize
   }
 
   private func loadTokenizer(snapshot: URL) throws -> QwenTokenizer {
@@ -168,7 +149,7 @@ public final class ZImagePipeline {
   }
 
   private func loadTextEncoder(snapshot _: URL, config: ZImageTextEncoderConfig) throws -> QwenTextEncoder {
-    return QwenTextEncoder(
+    QwenTextEncoder(
       configuration: .init(
         vocabSize: config.vocabSize,
         hiddenSize: config.hiddenSize,
@@ -185,37 +166,7 @@ public final class ZImagePipeline {
   }
 
   private func loadTransformer(snapshot _: URL, config: ZImageTransformerConfig) throws -> ZImageTransformer2DModel {
-    return ZImageTransformer2DModel(configuration: config)
-  }
-
-  private func auditModuleWeightShapeMismatches(
-    module: Module,
-    weights: [String: MLXArray],
-    transpose4DTensors: Bool,
-    logger: Logger,
-    sample: Int = 10
-  ) -> [String] {
-    let params = module.parameters().flattened()
-    var mismatches: [String] = []
-    mismatches.reserveCapacity(8)
-
-    for (key, param) in params {
-      guard var tensor = weights[key] else { continue }
-      if transpose4DTensors, tensor.ndim == 4 {
-        tensor = tensor.transposed(0, 2, 3, 1)
-      }
-      if tensor.shape != param.shape {
-        mismatches.append("\(key) expected \(param.shape) got \(tensor.shape)")
-      }
-    }
-
-    if !mismatches.isEmpty {
-      let sampleList = mismatches.prefix(max(0, sample)).joined(separator: "; ")
-      let suffix = mismatches.count > sample ? "; ..." : ""
-      logger.warning("Found \(mismatches.count) weight shape mismatches (sample: \(sampleList)\(suffix))")
-    }
-
-    return mismatches
+    ZImageTransformer2DModel(configuration: config)
   }
 
   private func loadVAEDecoder(snapshot _: URL, config: ZImageVAEConfig) throws -> AutoencoderDecoderOnly {
@@ -255,7 +206,7 @@ public final class ZImagePipeline {
     let candidateURL = URL(fileURLWithPath: modelSpec)
     var isDir: ObjCBool = false
     if FileManager.default.fileExists(atPath: candidateURL.path, isDirectory: &isDir) {
-      if !isDir.boolValue && candidateURL.pathExtension == "safetensors" {
+      if !isDir.boolValue, candidateURL.pathExtension == "safetensors" {
         return resolveLocalSafetensors(candidateURL, forceTransformerOverrideOnly: forceTransformerOverrideOnly)
       }
       if isDir.boolValue {
@@ -335,11 +286,11 @@ public final class ZImagePipeline {
       logger.info("Applying transformer override weights from: \(overrideURL.lastPathComponent)")
       var overrideWeights = try weightsMapper.loadTransformer(fromFile: overrideURL, dtype: .bfloat16)
 
-      if let inferredDim = inferTransformerDim(from: overrideWeights), inferredDim != configs.transformer.dim {
+      if let inferredDim = ZImageTransformerOverride.inferDim(from: overrideWeights), inferredDim != configs.transformer.dim {
         throw PipelineError.weightsMissing("Transformer override dim \(inferredDim) mismatches model dim \(configs.transformer.dim)")
       }
 
-      overrideWeights = canonicalizeTransformerOverride(overrideWeights, dim: configs.transformer.dim, logger: logger)
+      overrideWeights = ZImageTransformerOverride.canonicalize(overrideWeights, dim: configs.transformer.dim, logger: logger)
       ZImageWeightsMapping.applyTransformer(weights: overrideWeights, to: transformer, manifest: nil, logger: logger)
       activeTransformerOverrideURL = overrideURL
     }
@@ -379,11 +330,7 @@ public final class ZImagePipeline {
     aioTextEncoderPrefix: String? = nil,
     progressHandler: ProgressHandler? = nil
   ) async throws {
-    let normalizedWeightsVariant: String? = {
-      guard let weightsVariant else { return nil }
-      let trimmed = weightsVariant.trimmingCharacters(in: .whitespacesAndNewlines)
-      return trimmed.isEmpty ? nil : trimmed.lowercased()
-    }()
+    let normalizedWeightsVariant = ZImageFiles.normalizedWeightsVariant(weightsVariant)
 
     let modelId = modelSpec ?? ZImageRepository.id
     let normalizedAIOPath = aioCheckpointURL?.standardizedFileURL.path
@@ -415,7 +362,6 @@ public final class ZImagePipeline {
 
         currentLoRA = nil
         currentLoRAConfig = nil
-        useDynamicLoRA = false
       } else {
         logger.info("Different model requested, unloading current model")
         unloadModel()
@@ -427,15 +373,14 @@ public final class ZImagePipeline {
 
     let snapshotFilePatterns: [String]? = aioCheckpointURL == nil ? nil : PipelineSnapshot.configAndTokenizerFilePatterns
     let shouldValidateWeightsForCache = snapshotFilePatterns == nil
-    let snapshotValidator: (@Sendable (URL) -> Bool)?
-    if shouldValidateWeightsForCache, let normalizedWeightsVariant {
-      snapshotValidator = { [logger] snapshot in
+    let snapshotValidator: (@Sendable (URL) -> Bool)? = if shouldValidateWeightsForCache, let normalizedWeightsVariant {
+      { [logger] snapshot in
         !ZImageFiles.resolveTransformerWeights(at: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger).isEmpty
           && !ZImageFiles.resolveTextEncoderWeights(at: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger).isEmpty
           && !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger).isEmpty
       }
     } else {
-      snapshotValidator = nil
+      nil
     }
 
     let snapshot = try await PipelineSnapshot.prepare(
@@ -477,18 +422,46 @@ public final class ZImagePipeline {
       progressHandler?(GenerationProgress(stage: .loadingTransformer, stepIndex: 0, totalSteps: 1))
       logger.info("Loading transformer...")
       let trans = try loadTransformer(snapshot: snapshot, config: configs.transformer)
-      var transformerWeights = canonicalizeTransformerOverride(aio.transformer, dim: configs.transformer.dim, logger: logger)
-      if let inferredDim = inferTransformerDim(from: transformerWeights), inferredDim != configs.transformer.dim {
+      var transformerWeights = ZImageTransformerOverride.canonicalize(aio.transformer, dim: configs.transformer.dim, logger: logger)
+      if let inferredDim = ZImageTransformerOverride.inferDim(from: transformerWeights), inferredDim != configs.transformer.dim {
         throw PipelineError.weightsMissing("AIO transformer dim \(inferredDim) mismatches model dim \(configs.transformer.dim)")
       }
-      try validateStrictAIOTransformerWeights(transformerWeights, config: configs.transformer)
-      try validateAIOTransformerCoverage(transformerWeights, transformer: trans)
+
+      let missingStrictKeys = ZImageAIOTransformerValidation.missingStrictRequiredKeys(in: transformerWeights, config: configs.transformer)
+      if !missingStrictKeys.isEmpty {
+        throw PipelineError.weightsMissing(
+          """
+          AIO checkpoint missing required transformer tensors after canonicalization: \(missingStrictKeys.joined(separator: ", ")).
+            Use --force-transformer-override-only to treat it as transformer-only.
+          """
+        )
+      }
+
+      let auditWeights = ZImageAIOTransformerValidation.coverageAuditWeights(transformerWeights)
+      let audit = WeightsAudit.audit(module: trans, weights: auditWeights, logger: logger, sample: 10)
+      let total = audit.matched + audit.missing.count
+      guard total > 0 else {
+        throw PipelineError.weightsMissing("AIO transformer audit failed: transformer contains no parameters.")
+      }
+
+      let minimumCoverage = 0.99
+      let coverage = Double(audit.matched) / Double(total)
+      guard coverage >= minimumCoverage else {
+        let percent = Int((coverage * 100.0).rounded())
+        let missingSample = audit.missing.prefix(10).joined(separator: ", ")
+        let suffix = audit.missing.count > 10 ? ", ..." : ""
+        throw PipelineError.weightsMissing("""
+        AIO transformer weights coverage too low:
+         matched \(audit.matched)/\(total) (\(percent)%).
+         Missing (sample): \(missingSample)\(suffix).
+         Use --force-transformer-override-only to treat it as transformer-only.
+        """)
+      }
       ZImageWeightsMapping.applyTransformer(weights: transformerWeights, to: trans, manifest: nil, logger: logger)
       transformer = trans
 
       activeTransformerOverrideURL = nil
       activeAIOCheckpointURL = aioCheckpointURL
-      quantManifest = nil
 
       if vae == nil {
         progressHandler?(GenerationProgress(stage: .loadingVAE, stepIndex: 0, totalSteps: 1))
@@ -505,7 +478,7 @@ public final class ZImagePipeline {
         let total = audit.matched + audit.missing.count
         let coverage = total > 0 ? Double(audit.matched) / Double(total) : 0.0
         let minimumCoverage = 0.99
-        let mismatches = auditModuleWeightShapeMismatches(
+        let mismatches = WeightsAudit.auditShapeMismatches(
           module: v,
           weights: decoderWeights,
           transpose4DTensors: true,
@@ -523,13 +496,12 @@ public final class ZImagePipeline {
             logger.warning("AIO VAE decoder weights have incompatible shapes (coverage \(percent)%), falling back to base VAE weights.")
           }
 
-          let vaeSnapshotValidator: (@Sendable (URL) -> Bool)?
-          if let normalizedWeightsVariant {
-            vaeSnapshotValidator = { [logger] snapshot in
+          let vaeSnapshotValidator: (@Sendable (URL) -> Bool)? = if let normalizedWeightsVariant {
+            { [logger] snapshot in
               !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: normalizedWeightsVariant, logger: logger).isEmpty
             }
           } else {
-            vaeSnapshotValidator = nil
+            nil
           }
           let baseVAESnapshot = try await PipelineSnapshot.prepare(
             model: modelSpec,
@@ -590,8 +562,6 @@ public final class ZImagePipeline {
       } else {
         logger.info("Reusing cached VAE")
       }
-
-      quantManifest = manifest
     }
 
     modelConfigs = configs
@@ -623,7 +593,6 @@ public final class ZImagePipeline {
       let loraWeights = try await LoRAWeightLoader.load(from: config)
       logger.info("Loaded LoRA: rank=\(loraWeights.rank), alpha=\(loraWeights.alpha), layers=\(loraWeights.layerCount)")
 
-      useDynamicLoRA = true
       LoRAApplicator.applyDynamically(to: trans, loraWeights: loraWeights, scale: config.scale, logger: logger)
 
       currentLoRA = loraWeights
@@ -636,11 +605,11 @@ public final class ZImagePipeline {
   }
 
   public var hasLoRALoaded: Bool {
-    return currentLoRA != nil
+    currentLoRA != nil
   }
 
   public var loadedLoRAConfig: LoRAConfiguration? {
-    return currentLoRAConfig
+    currentLoRAConfig
   }
 
   public func generate(_ request: ZImageGenerationRequest, progressHandler: ProgressHandler? = nil) async throws -> URL {
@@ -684,8 +653,8 @@ public final class ZImagePipeline {
       progressHandler: progressHandler
     )
 
-    guard let vae = vae,
-          let modelConfigs = modelConfigs
+    guard let vae,
+          let modelConfigs
     else {
       throw PipelineError.modelNotLoaded
     }
@@ -708,22 +677,17 @@ public final class ZImagePipeline {
     let promptEmbeds: MLXArray
     let negativeEmbeds: MLXArray?
     do {
-      guard let tokenizer = tokenizer else {
+      guard let tokenizer else {
         throw PipelineError.tokenizerNotLoaded
       }
-      guard let textEncoder = textEncoder else {
+      guard let textEncoder else {
         throw PipelineError.textEncoderNotLoaded
       }
 
       var finalPrompt = request.prompt
       if request.enhancePrompt {
         logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
-        let enhanceConfig = PromptEnhanceConfig(
-          maxNewTokens: request.enhanceMaxTokens,
-          temperature: 0.7,
-          topP: 0.9,
-          repetitionPenalty: 1.05
-        )
+        let enhanceConfig = PromptEnhanceConfig(maxNewTokens: request.enhanceMaxTokens)
         let enhanced = try textEncoder.enhancePrompt(request.prompt, tokenizer: tokenizer, config: enhanceConfig)
         if enhanced.isEmpty {
           logger.warning("Prompt enhancement incomplete (need more tokens), using original prompt")
@@ -757,7 +721,7 @@ public final class ZImagePipeline {
     let randomKey: RandomStateOrKey? = request.seed.map { MLXRandom.key($0) }
     var latents = MLXRandom.normal(shape, loc: 0, scale: 1, key: randomKey)
 
-    let mu = calculateShift(
+    let mu = PipelineUtilities.calculateShift(
       imageSeqLen: latentH * latentW,
       baseSeqLen: modelConfigs.scheduler.baseImageSeqLen ?? 256,
       maxSeqLen: modelConfigs.scheduler.maxImageSeqLen ?? 4096,
@@ -775,7 +739,7 @@ public final class ZImagePipeline {
 
     logger.info("Running \(request.steps) denoising steps...")
     do {
-      guard let transformer = transformer else {
+      guard let transformer else {
         throw PipelineError.transformerNotLoaded
       }
       for stepIndex in 0 ..< request.steps {
@@ -814,153 +778,14 @@ public final class ZImagePipeline {
     logger.info("Denoising complete, decoding with VAE...")
     progressHandler?(GenerationProgress(stage: .decoding, stepIndex: request.steps, totalSteps: request.steps))
 
-    let decoded = decodeLatents(latents, vae: vae, height: request.height, width: request.width)
+    let decoded = PipelineUtilities.decodeLatents(latents, vae: vae, height: request.height, width: request.width)
     MLX.eval(MLXArray([]))
     GPU.clearCache()
 
     return decoded
   }
 
-  private func decodeLatents(_ latents: MLXArray, vae: VAEImageDecoding, height: Int, width: Int) -> MLXArray {
-    PipelineUtilities.decodeLatents(latents, vae: vae, height: height, width: width)
-  }
-
-  private func calculateShift(
-    imageSeqLen: Int,
-    baseSeqLen: Int,
-    maxSeqLen: Int,
-    baseShift: Float,
-    maxShift: Float
-  ) -> Float {
-    PipelineUtilities.calculateShift(
-      imageSeqLen: imageSeqLen,
-      baseSeqLen: baseSeqLen,
-      maxSeqLen: maxSeqLen,
-      baseShift: baseShift,
-      maxShift: maxShift
-    )
-  }
-
   private func areZImageVariants(_ model1: String, _ model2: String) -> Bool {
     ZImageModelRegistry.areZImageVariants(model1, model2)
-  }
-
-  private func inferTransformerDim(from weights: [String: MLXArray]) -> Int? {
-    // Try common norm vectors first
-    if let w = weights["layers.0.attention_norm1.weight"], w.ndim == 1 { return w.dim(0) }
-    if let w = weights["layers.0.ffn_norm1.weight"], w.ndim == 1 { return w.dim(0) }
-    // Try attention projections
-    if let w = weights["layers.0.attention.to_q.weight"], w.ndim == 2 { return w.dim(0) }
-    if let w = weights["layers.0.attention.to_out.0.weight"], w.ndim == 2 { return w.dim(1) }
-    // Scan for any norm weight
-    if let (k, w) = weights.first(where: { $0.key.hasSuffix("attention_norm1.weight") && $0.value.ndim == 1 }) { _ = k; return w.dim(0) }
-    if let (k, w) = weights.first(where: { $0.key.hasSuffix("ffn_norm1.weight") && $0.value.ndim == 1 }) { _ = k; return w.dim(0) }
-    return nil
-  }
-
-  /// Canonicalize override checkpoints so their tensor keys match our transformer module names.
-  /// Supports SD/ComfyUI-style exports that prefix keys with e.g. "model.diffusion_model.".
-  func canonicalizeTransformerOverride(_ weights: [String: MLXArray], dim: Int, logger: Logger) -> [String: MLXArray] {
-    var out: [String: MLXArray] = [:]
-    for (k, v) in weights {
-      // Strip common root prefixes from external checkpoints.
-      var key = k
-      for prefix in ["model.diffusion_model.", "diffusion_model.", "transformer.", "model."] {
-        if key.hasPrefix(prefix) {
-          key = String(key.dropFirst(prefix.count))
-        }
-      }
-
-      // Some checkpoints use q_norm/k_norm naming; base Z-Image uses norm_q/norm_k.
-      key = key.replacingOccurrences(of: ".attention.q_norm.weight", with: ".attention.norm_q.weight")
-      key = key.replacingOccurrences(of: ".attention.k_norm.weight", with: ".attention.norm_k.weight")
-
-      // Map attention.out.weight -> attention.to_out.0.weight
-      if key.hasSuffix(".attention.out.weight") {
-        let newKey = key.replacingOccurrences(of: ".attention.out.weight", with: ".attention.to_out.0.weight")
-        out[newKey] = v
-        continue
-      }
-
-      // Split attention.qkv.weight -> to_q.weight, to_k.weight, to_v.weight
-      if key.hasSuffix(".attention.qkv.weight") {
-        if v.ndim == 2, v.dim(0) == dim * 3, v.dim(1) == dim {
-          let q = v[0 ..< dim, 0...]
-          let kW = v[dim ..< 2 * dim, 0...]
-          let vW = v[2 * dim ..< 3 * dim, 0...]
-          let base = key.replacingOccurrences(of: ".attention.qkv.weight", with: "")
-          out["\(base).attention.to_q.weight"] = q
-          out["\(base).attention.to_k.weight"] = kW
-          out["\(base).attention.to_v.weight"] = vW
-        } else {
-          logger.warning("Unexpected qkv shape for \(key): \(v.shape) (expected [\(dim * 3), \(dim)])")
-        }
-        continue
-      }
-
-      // Passthrough other keys
-      var mapped = key
-      // Remap final_layer.* -> all_final_layer.2-1.* so our loader can pick them up
-      if mapped.hasPrefix("final_layer.") {
-        mapped = mapped.replacingOccurrences(of: "final_layer.", with: "all_final_layer.2-1.")
-      }
-      // Remap x_embedder.* -> all_x_embedder.2-1.*
-      if mapped.hasPrefix("x_embedder.") {
-        mapped = mapped.replacingOccurrences(of: "x_embedder.", with: "all_x_embedder.2-1.")
-      }
-      out[mapped] = v
-    }
-    return out
-  }
-
-  func validateStrictAIOTransformerWeights(_ weights: [String: MLXArray], config: ZImageTransformerConfig) throws {
-    var required: [String] = [
-      "layers.0.attention.to_q.weight",
-      "layers.0.attention.to_out.0.weight",
-    ]
-
-    if config.qkNorm {
-      required.append(contentsOf: [
-        "layers.0.attention.norm_q.weight",
-        "layers.0.attention.norm_k.weight",
-      ])
-    }
-
-    let missing = required.filter { weights[$0] == nil }
-    if !missing.isEmpty {
-      throw PipelineError.weightsMissing(
-        "AIO checkpoint missing required transformer tensors after canonicalization: \(missing.joined(separator: ", ")). Use --force-transformer-override-only to treat it as transformer-only."
-      )
-    }
-  }
-
-  func validateAIOTransformerCoverage(
-    _ weights: [String: MLXArray],
-    transformer: ZImageTransformer2DModel,
-    minimumCoverage: Double = 0.99
-  ) throws {
-    var auditWeights = weights
-    if let w = weights["cap_embedder.0.weight"] { auditWeights["capEmbedNorm.weight"] = w }
-    if let w = weights["cap_embedder.1.weight"] { auditWeights["capEmbedLinear.weight"] = w }
-    if let w = weights["cap_embedder.1.bias"] { auditWeights["capEmbedLinear.bias"] = w }
-
-    let audit = WeightsAudit.audit(module: transformer, weights: auditWeights, logger: logger, sample: 10)
-    let total = audit.matched + audit.missing.count
-    guard total > 0 else {
-      throw PipelineError.weightsMissing("AIO transformer audit failed: transformer contains no parameters.")
-    }
-
-    let coverage = Double(audit.matched) / Double(total)
-    guard coverage >= minimumCoverage else {
-      let percent = Int((coverage * 100.0).rounded())
-      let missingSample = audit.missing.prefix(10).joined(separator: ", ")
-      let suffix = audit.missing.count > 10 ? ", ..." : ""
-      throw PipelineError.weightsMissing("""
-      AIO transformer weights coverage too low:
-       matched \(audit.matched)/\(total) (\(percent)%).
-       Missing (sample): \(missingSample)\(suffix).
-       Use --force-transformer-override-only to treat it as transformer-only.
-      """)
-    }
   }
 }

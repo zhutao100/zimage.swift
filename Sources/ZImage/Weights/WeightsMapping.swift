@@ -3,7 +3,7 @@ import Logging
 import MLX
 import MLXNN
 
-public struct ZImageWeightsMapping {
+public enum ZImageWeightsMapping {
   public struct Partition {
     public let transformer: [String: MLXArray]
     public let textEncoder: [String: MLXArray]
@@ -11,7 +11,7 @@ public struct ZImageWeightsMapping {
     public let unassigned: [String: MLXArray]
   }
 
-  public static func partition(weights: [String: MLXArray], logger: Logger? = nil) -> Partition {
+  public static func partition(weights: [String: MLXArray], logger _: Logger? = nil) -> Partition {
     var transformer: [String: MLXArray] = [:]
     var textEncoder: [String: MLXArray] = [:]
     var vae: [String: MLXArray] = [:]
@@ -81,7 +81,7 @@ public struct ZImageWeightsMapping {
       return
     }
 
-    if let manifest = manifest {
+    if let manifest {
       let availableKeys = Set(weights.keys)
       ZImageQuantizer.applyQuantization(
         to: model,
@@ -92,7 +92,7 @@ public struct ZImageWeightsMapping {
     }
 
     let mapped = transformerMapping(weights)
-    applyToModule(model, weights: mapped, prefix: "transformer", logger: logger)
+    ZImageModuleWeightsApplier.applyToModule(model, weights: mapped, prefix: "transformer", logger: logger)
 
     let groupSize = manifest?.groupSize ?? 32
     let bits = manifest?.bits ?? 8
@@ -114,7 +114,7 @@ public struct ZImageWeightsMapping {
       return
     }
 
-    if let manifest = manifest {
+    if let manifest {
       let availableKeys = Set(weights.keys)
       ZImageQuantizer.applyQuantization(
         to: model,
@@ -125,13 +125,13 @@ public struct ZImageWeightsMapping {
     }
 
     let mapped = textEncoderMapping(weights)
-    applyToModule(model, weights: mapped, prefix: "text_encoder", logger: logger)
+    ZImageModuleWeightsApplier.applyToModule(model, weights: mapped, prefix: "text_encoder", logger: logger)
   }
 
   public static func applyVAE(
     weights: [String: MLXArray],
     to model: Module,
-    manifest: ZImageQuantizationManifest? = nil,
+    manifest _: ZImageQuantizationManifest? = nil,
     logger: Logger
   ) {
     if weights.isEmpty {
@@ -140,43 +140,6 @@ public struct ZImageWeightsMapping {
     }
 
     let mapped = vaeMapping(weights)
-    applyToModule(model, weights: mapped, prefix: "vae", logger: logger)
-  }
-
-  private static func applyToModule(_ module: Module, weights: [String: MLXArray], prefix: String, logger: Logger) {
-    let params = module.parameters().flattened()
-    var updates: [(String, MLXArray)] = []
-
-    for (key, _) in params {
-      let candidates = [key, "\(prefix).\(key)"]
-      if let found = candidates.compactMap({ weights[$0] }).first {
-        updates.append((key, found))
-      }
-    }
-
-    for (weightKey, tensor) in weights {
-      var paramKey = weightKey
-      if weightKey.hasPrefix("\(prefix).") {
-        paramKey = String(weightKey.dropFirst("\(prefix).".count))
-      }
-
-      if (paramKey.hasSuffix(".scales") || paramKey.hasSuffix(".biases")) {
-        if !updates.contains(where: { $0.0 == paramKey }) {
-          updates.append((paramKey, tensor))
-        }
-      }
-    }
-
-    if updates.isEmpty {
-      logger.warning("\(prefix) received no matching weights; skipping apply.")
-      return
-    }
-
-    do {
-      let nd = ModuleParameters.unflattened(updates)
-      try module.update(parameters: nd, verify: [.shapeMismatch])
-    } catch {
-      logger.error("Failed to apply weights to \(prefix): \(error)")
-    }
+    ZImageModuleWeightsApplier.applyToModule(model, weights: mapped, prefix: "vae", logger: logger)
   }
 }

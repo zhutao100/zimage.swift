@@ -4,6 +4,7 @@ import MLXNN
 
 public enum PipelineUtilities {
   public enum UtilityError: Error {
+    @available(*, deprecated, message: "No longer thrown by PipelineUtilities; kept for source compatibility.")
     case textEncoderFailed
     case emptyEmbeddings
   }
@@ -36,11 +37,10 @@ public enum PipelineUtilities {
     height: Int,
     width: Int
   ) -> MLXArray {
-    let input: MLXArray
-    if latents.dtype == .bfloat16 {
-      input = latents
+    let input: MLXArray = if latents.dtype == .bfloat16 {
+      latents
     } else {
-      input = latents.asType(.bfloat16)
+      latents.asType(.bfloat16)
     }
 
     let (decoded, _) = vae.decode(input, return_dict: false)
@@ -69,6 +69,7 @@ public enum PipelineUtilities {
     return Float(imageSeqLen) * m + b
   }
 
+  @available(*, deprecated, message: "Use ZImagePipeline.loadModel / PipelineSnapshot.prepare instead.")
   public static func prepareSnapshot(
     model: String?,
     defaultModelId: String,
@@ -76,24 +77,19 @@ public enum PipelineUtilities {
     weightsVariant: String? = nil,
     progressHandler: (@Sendable (Progress) -> Void)? = nil
   ) async throws -> URL {
-    let normalizedWeightsVariant: String? = {
-      guard let weightsVariant else { return nil }
-      let trimmed = weightsVariant.trimmingCharacters(in: .whitespacesAndNewlines)
-      return trimmed.isEmpty ? nil : trimmed.lowercased()
-    }()
+    let normalizedWeightsVariant = ZImageFiles.normalizedWeightsVariant(weightsVariant)
     let patterns = PipelineSnapshot.modelFilePatterns(weightsVariant: normalizedWeightsVariant)
     let requireWeights = patterns.contains(where: { $0.localizedCaseInsensitiveContains("safetensors") })
-    let snapshotValidator: (@Sendable (URL) -> Bool)?
-    if let normalizedWeightsVariant {
-      snapshotValidator = { snapshot in
+    let snapshotValidator: (@Sendable (URL) -> Bool)? = if let normalizedWeightsVariant {
+      { snapshot in
         !ZImageFiles.resolveTransformerWeights(at: snapshot, weightsVariant: normalizedWeightsVariant).isEmpty
           && !ZImageFiles.resolveTextEncoderWeights(at: snapshot, weightsVariant: normalizedWeightsVariant).isEmpty
           && !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: normalizedWeightsVariant).isEmpty
       }
     } else {
-      snapshotValidator = nil
+      nil
     }
-    let resolvedURL = try await ModelResolution.resolveOrDefault(
+    return try await ModelResolution.resolveOrDefault(
       modelSpec: model,
       defaultModelId: defaultModelId,
       defaultRevision: defaultRevision,
@@ -102,10 +98,9 @@ public enum PipelineUtilities {
       snapshotValidator: snapshotValidator,
       progressHandler: progressHandler
     )
-
-    return resolvedURL
   }
 
+  @available(*, deprecated, message: "Pipelines validate dimensions internally; kept for source compatibility.")
   public static func validateDimensions(
     width: Int,
     height: Int,
@@ -119,6 +114,7 @@ public enum PipelineUtilities {
     }
   }
 
+  @available(*, deprecated, message: "Deprecated with validateDimensions.")
   public enum DimensionError: Error, LocalizedError {
     case widthNotDivisible(width: Int, scale: Int)
     case heightNotDivisible(height: Int, scale: Int)
@@ -126,9 +122,9 @@ public enum PipelineUtilities {
     public var errorDescription: String? {
       switch self {
       case let .widthNotDivisible(width, scale):
-        return "Width must be divisible by \(scale) (got \(width)). Please adjust to a multiple of \(scale)."
+        "Width must be divisible by \(scale) (got \(width)). Please adjust to a multiple of \(scale)."
       case let .heightNotDivisible(height, scale):
-        return "Height must be divisible by \(scale) (got \(height)). Please adjust to a multiple of \(scale)."
+        "Height must be divisible by \(scale) (got \(height)). Please adjust to a multiple of \(scale)."
       }
     }
   }

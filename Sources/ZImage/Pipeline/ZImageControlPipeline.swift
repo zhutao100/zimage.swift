@@ -170,7 +170,6 @@ public class ZImageControlPipeline {
 
   private var logger: Logger
   private var tokenizer: QwenTokenizer?
-  private var textEncoder: QwenTextEncoder?
   private var vae: AutoencoderKL?
   private var transformer: ZImageControlTransformer2DModel?
   private var modelConfigs: ZImageModelConfigs?
@@ -198,7 +197,7 @@ public class ZImageControlPipeline {
   }
 
   private func clearControlnetWeights() {
-    guard let transformer = transformer else { return }
+    guard let transformer else { return }
     logger.info("Clearing controlnet weights to free GPU memory...")
     for (key, linear) in transformer.controlAllXEmbedder {
       let zeroWeight = MLXArray.zeros(like: linear.weight)
@@ -296,7 +295,7 @@ public class ZImageControlPipeline {
   }
 
   private func loadTextEncoder(snapshot _: URL, config: ZImageTextEncoderConfig) throws -> QwenTextEncoder {
-    return QwenTextEncoder(
+    QwenTextEncoder(
       configuration: .init(
         vocabSize: config.vocabSize,
         hiddenSize: config.hiddenSize,
@@ -332,7 +331,7 @@ public class ZImageControlPipeline {
   }
 
   private func loadVAE(snapshot _: URL, config: ZImageVAEConfig) throws -> AutoencoderKL {
-    return AutoencoderKL(configuration: .init(
+    AutoencoderKL(configuration: .init(
       inChannels: config.inChannels,
       outChannels: config.outChannels,
       latentChannels: config.latentChannels,
@@ -468,9 +467,8 @@ public class ZImageControlPipeline {
     let latentW = max(1, targetWidth / vaeDivisor)
     let pixelH = latentH * vaeDivisor
     let pixelW = latentW * vaeDivisor
-    let controlLatents: MLXArray
-    if let control = controlImage {
-      controlLatents = try encodeImageToLatents(
+    let controlLatents: MLXArray = if let control = controlImage {
+      try encodeImageToLatents(
         cgImage: control,
         vae: vae,
         vaeConfig: vaeConfig,
@@ -478,7 +476,7 @@ public class ZImageControlPipeline {
         pixelW: pixelW
       )
     } else {
-      controlLatents = MLXArray.zeros([1, 16, latentH, latentW])
+      MLXArray.zeros([1, 16, latentH, latentW])
     }
     let pixelMask: MLXArray?
     if let mask = maskImage {
@@ -548,7 +546,7 @@ public class ZImageControlPipeline {
     targetHeight: Int,
     targetWidth: Int
   ) throws -> MLXArray {
-    return try buildControlContext(
+    try buildControlContext(
       controlImage: cgImage,
       inpaintImage: nil,
       maskImage: nil,
@@ -560,10 +558,10 @@ public class ZImageControlPipeline {
   }
   #endif
   private func applyLoRAIfNeeded(_ requestedConfig: LoRAConfiguration?) async throws {
-    guard let transformer = transformer else {
+    guard let transformer else {
       throw PipelineError.transformerNotLoaded
     }
-    if let currentConfig = currentLoRAConfig, let requestedConfig = requestedConfig, currentConfig == requestedConfig {
+    if let currentConfig = currentLoRAConfig, let requestedConfig, currentConfig == requestedConfig {
       logger.info("LoRA already loaded with same configuration, skipping")
       return
     }
@@ -588,7 +586,7 @@ public class ZImageControlPipeline {
   }
 
   public func unloadLoRA() {
-    guard let transformer = transformer else { return }
+    guard let transformer else { return }
     if currentLoRA != nil {
       if let lora = currentLoRA, let config = currentLoRAConfig, lora.hasLoKr {
         LoRAApplicator.removeLoKr(from: transformer, loraWeights: lora, scale: config.scale, logger: logger)
@@ -624,22 +622,28 @@ public class ZImageControlPipeline {
   }
 
   public var hasLoRALoaded: Bool {
-    return currentLoRA != nil
+    currentLoRA != nil
   }
 
   public var loadedLoRAConfig: LoRAConfiguration? {
-    return currentLoRAConfig
+    currentLoRAConfig
+  }
+
+  public func generate(_ request: ZImageControlGenerationRequest) async throws -> URL {
+    logger.info("Requested Z-Image control generation")
+    let decoded = try await generateCore(request)
+    guard let outputPath = request.outputPath else {
+      throw PipelineError.outputPathRequired
+    }
+    try QwenImageIO.saveImage(array: decoded, to: outputPath)
+    logger.info("Wrote image to \(outputPath.path)")
+    return outputPath
   }
 
   // swiftlint:disable:next cyclomatic_complexity
-  public func generate(_ request: ZImageControlGenerationRequest) async throws -> URL {
-    logger.info("Requested Z-Image control generation")
+  private func generateCore(_ request: ZImageControlGenerationRequest) async throws -> MLXArray {
     let requestedModelId = request.model ?? ZImageRepository.id
-    let requestedWeightsVariant: String? = {
-      guard let weightsVariant = request.weightsVariant else { return nil }
-      let trimmed = weightsVariant.trimmingCharacters(in: .whitespacesAndNewlines)
-      return trimmed.isEmpty ? nil : trimmed.lowercased()
-    }()
+    let requestedWeightsVariant = ZImageFiles.normalizedWeightsVariant(request.weightsVariant)
     let requestedControlnetId = request.controlnetWeights
     let needsModelReload = (loadedModelId != requestedModelId) || (loadedWeightsVariant != requestedWeightsVariant)
     let needsControlnetReload = (loadedControlnetWeightsId != requestedControlnetId)
@@ -650,7 +654,6 @@ public class ZImageControlPipeline {
         && ZImageModelRegistry.areZImageVariants(loadedModelId ?? "", requestedModelId)
       if canPreserveSharedComponents {
         logger.info("Switching Z-Image variant, preserving VAE and tokenizer")
-        textEncoder = nil
         self.transformer = nil
         self.modelConfigs = nil
         self.quantManifest = nil
@@ -662,7 +665,6 @@ public class ZImageControlPipeline {
         GPU.clearCache()
       } else {
         self.tokenizer = nil
-        textEncoder = nil
         self.vae = nil
         self.transformer = nil
         self.modelConfigs = nil
@@ -675,15 +677,14 @@ public class ZImageControlPipeline {
         GPU.clearCache()
       }
       logger.info("Loading model \(requestedModelId)...")
-      let snapshotValidator: (@Sendable (URL) -> Bool)?
-      if let requestedWeightsVariant {
-        snapshotValidator = { [logger] snapshot in
+      let snapshotValidator: (@Sendable (URL) -> Bool)? = if let requestedWeightsVariant {
+        { [logger] snapshot in
           !ZImageFiles.resolveTransformerWeights(at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger).isEmpty
             && !ZImageFiles.resolveTextEncoderWeights(at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger).isEmpty
             && !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger).isEmpty
         }
       } else {
-        snapshotValidator = nil
+        nil
       }
       let snapshot = try await PipelineSnapshot.prepare(
         model: request.model,
@@ -779,10 +780,10 @@ public class ZImageControlPipeline {
       logger.info("Reusing cached controlnet weights")
     }
     try await applyLoRAIfNeeded(request.lora)
-    guard let snapshot = snapshot,
-          let modelConfigs = modelConfigs,
-          let tokenizer = tokenizer,
-          let vae = vae
+    guard let snapshot,
+          let modelConfigs,
+          let tokenizer,
+          let vae
     else {
       throw PipelineError.transformerNotLoaded
     }
@@ -807,7 +808,7 @@ public class ZImageControlPipeline {
         ))
       }
     } else {
-      if request.enhancePrompt && transformer != nil {
+      if request.enhancePrompt, transformer != nil {
         let availableMemory = getAvailableMemory()
         let textEncoderSize: UInt64 = 6 * 1024 * 1024 * 1024
         if availableMemory < textEncoderSize {
@@ -834,12 +835,7 @@ public class ZImageControlPipeline {
           stepIndex: 0, totalSteps: 0, fractionCompleted: 0
         ))
         logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
-        let enhanceConfig = PromptEnhanceConfig(
-          maxNewTokens: request.enhanceMaxTokens,
-          temperature: 0.7,
-          topP: 0.9,
-          repetitionPenalty: 1.05
-        )
+        let enhanceConfig = PromptEnhanceConfig(maxNewTokens: request.enhanceMaxTokens)
         let enhanced = try textEncoder.enhancePrompt(request.prompt, tokenizer: tokenizer, config: enhanceConfig)
         if enhanced.isEmpty {
           logger.warning("Prompt enhancement incomplete (need more tokens), using original prompt")
@@ -919,7 +915,7 @@ public class ZImageControlPipeline {
     let randomKey: RandomStateOrKey? = request.seed.map { MLXRandom.key($0) }
     let initialNoise = MLXRandom.normal(shape, loc: 0, scale: 1, key: randomKey)
     var latents = initialNoise
-    let mu = calculateShift(
+    let mu = PipelineUtilities.calculateShift(
       imageSeqLen: latentH * latentW,
       baseSeqLen: modelConfigs.scheduler.baseImageSeqLen ?? 256,
       maxSeqLen: modelConfigs.scheduler.maxImageSeqLen ?? 4096,
@@ -966,7 +962,7 @@ public class ZImageControlPipeline {
     }
     logger.info("Running \(request.steps) denoising steps with control_context_scale=\(request.controlContextScale)...")
     do {
-      guard let transformer = transformer else {
+      guard let transformer else {
         throw PipelineError.transformerNotLoaded
       }
       for stepIndex in 0 ..< request.steps {
@@ -1021,399 +1017,18 @@ public class ZImageControlPipeline {
       fractionCompleted: 1.0
     ))
     logger.info("Denoising complete, decoding latents...")
-    guard let outputPath = request.outputPath else {
-      throw PipelineError.outputPathRequired
-    }
-    let decoded = decodeLatents(latents, vae: vae, height: request.height, width: request.width)
-    try QwenImageIO.saveImage(array: decoded, to: outputPath)
-    logger.info("Wrote image to \(outputPath.path)")
-    return outputPath
+    return PipelineUtilities.decodeLatents(latents, vae: vae, height: request.height, width: request.width)
   }
 
   #if canImport(CoreGraphics)
-  // swiftlint:disable:next cyclomatic_complexity
   public func generateToMemory(_ request: ZImageControlGenerationRequest) async throws -> Data {
     logger.info("Requested Z-Image control generation (to memory)")
-    let requestedModelId = request.model ?? ZImageRepository.id
-    let requestedWeightsVariant: String? = {
-      guard let weightsVariant = request.weightsVariant else { return nil }
-      let trimmed = weightsVariant.trimmingCharacters(in: .whitespacesAndNewlines)
-      return trimmed.isEmpty ? nil : trimmed.lowercased()
-    }()
-    let requestedControlnetId = request.controlnetWeights
-    let needsModelReload = (loadedModelId != requestedModelId) || (loadedWeightsVariant != requestedWeightsVariant)
-    let needsControlnetReload = (loadedControlnetWeightsId != requestedControlnetId)
-    if needsModelReload {
-      let canPreserveSharedComponents = loadedModelId != nil
-        && loadedModelId != requestedModelId
-        && loadedWeightsVariant == requestedWeightsVariant
-        && ZImageModelRegistry.areZImageVariants(loadedModelId ?? "", requestedModelId)
-      if canPreserveSharedComponents {
-        logger.info("Switching Z-Image variant, preserving VAE and tokenizer")
-        textEncoder = nil
-        self.transformer = nil
-        self.modelConfigs = nil
-        self.quantManifest = nil
-        self.snapshot = nil
-        loadedWeightsVariant = nil
-        currentLoRA = nil
-        currentLoRAConfig = nil
-        cachedPromptEmbedding = nil
-        GPU.clearCache()
-      } else {
-        self.tokenizer = nil
-        textEncoder = nil
-        self.vae = nil
-        self.transformer = nil
-        self.modelConfigs = nil
-        self.quantManifest = nil
-        self.snapshot = nil
-        loadedWeightsVariant = nil
-        currentLoRA = nil
-        currentLoRAConfig = nil
-        cachedPromptEmbedding = nil
-        GPU.clearCache()
-      }
-      logger.info("Loading model \(requestedModelId)...")
-      let snapshotValidator: (@Sendable (URL) -> Bool)?
-      if let requestedWeightsVariant {
-        snapshotValidator = { [logger] snapshot in
-          !ZImageFiles.resolveTransformerWeights(at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger).isEmpty
-            && !ZImageFiles.resolveTextEncoderWeights(at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger).isEmpty
-            && !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger).isEmpty
-        }
-      } else {
-        snapshotValidator = nil
-      }
-      let snapshot = try await PipelineSnapshot.prepare(
-        model: request.model,
-        weightsVariant: requestedWeightsVariant,
-        snapshotValidator: snapshotValidator,
-        logger: logger
-      )
-      let modelConfigs = try ZImageModelConfigs.load(from: snapshot)
-      let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: requestedWeightsVariant, logger: logger)
-      let quantManifest = weightsMapper.loadQuantizationManifest()
-      if quantManifest == nil {
-        try ZImageFiles.validateRequiredComponentWeights(at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger)
-      }
-      if let manifest = quantManifest {
-        logger.info("Loading quantized model (bits=\(manifest.bits), group_size=\(manifest.groupSize))")
-      }
-      self.snapshot = snapshot
-      self.modelConfigs = modelConfigs
-      self.quantManifest = quantManifest
-      if self.tokenizer == nil {
-        logger.info("Loading tokenizer...")
-        self.tokenizer = try loadTokenizer(snapshot: snapshot)
-      } else {
-        logger.info("Reusing cached tokenizer")
-      }
-
-      if self.vae == nil {
-        logger.info("Loading VAE...")
-        let vae = try loadVAE(snapshot: snapshot, config: modelConfigs.vae)
-        let vaeWeights = try weightsMapper.loadVAE()
-        ZImageWeightsMapping.applyVAE(weights: vaeWeights, to: vae, manifest: quantManifest, logger: logger)
-        self.vae = vae
-      } else {
-        logger.info("Reusing cached VAE")
-      }
-      logger.info("Loading control transformer...")
-      let transformer = try loadControlTransformer(snapshot: snapshot, config: modelConfigs.transformer)
-      let transformerWeights = try weightsMapper.loadTransformer()
-      ZImageControlWeightsMapping.applyControlTransformer(
-        weights: transformerWeights,
-        to: transformer,
-        manifest: quantManifest,
-        logger: logger
-      )
-      self.transformer = transformer
-      loadedModelId = requestedModelId
-      loadedWeightsVariant = requestedWeightsVariant
-      loadedControlnetWeightsId = nil
-    } else if transformer == nil {
-      logger.info("Reloading transformer (cache preserved)...")
-      guard let snapshot = self.snapshot,
-            let modelConfigs = self.modelConfigs
-      else {
-        throw PipelineError.transformerNotLoaded
-      }
-      let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
-      logger.info("Loading control transformer...")
-      let transformer = try loadControlTransformer(snapshot: snapshot, config: modelConfigs.transformer)
-      let transformerWeights = try weightsMapper.loadTransformer()
-      ZImageControlWeightsMapping.applyControlTransformer(
-        weights: transformerWeights,
-        to: transformer,
-        manifest: quantManifest,
-        logger: logger
-      )
-      self.transformer = transformer
-      loadedControlnetWeightsId = nil
-    } else {
-      logger.info("Reusing cached model \(requestedModelId)")
-    }
-    if needsControlnetReload || needsModelReload {
-      if let controlnetSpec = requestedControlnetId {
-        logger.info("Loading controlnet weights from \(controlnetSpec)...")
-        let result = try await loadControlnetWeights(
-          controlnetSpec: controlnetSpec,
-          preferredFile: request.controlnetWeightsFile,
-          progressCallback: request.progressCallback
-        )
-        ZImageControlWeightsMapping.applyControlnetWeights(
-          weights: result.weights,
-          to: transformer!,
-          manifest: result.manifest,
-          logger: logger
-        )
-        loadedControlnetWeightsId = controlnetSpec
-      } else {
-        if loadedControlnetWeightsId != nil {
-          clearControlnetWeights()
-        }
-        loadedControlnetWeightsId = nil
-      }
-    } else if requestedControlnetId != nil {
-      logger.info("Reusing cached controlnet weights")
-    }
-    try await applyLoRAIfNeeded(request.lora)
-    guard let snapshot = snapshot,
-          let modelConfigs = modelConfigs,
-          let tokenizer = tokenizer,
-          let vae = vae
-    else {
-      throw PipelineError.transformerNotLoaded
-    }
-    let doCFG = request.guidanceScale > 1.0
-    let promptEmbeds: MLXArray
-    let negativeEmbeds: MLXArray?
-    if let cached = cachedPromptEmbedding,
-       cached.prompt == request.prompt,
-       cached.negativePrompt == request.negativePrompt,
-       cached.maxSequenceLength == request.maxSequenceLength,
-       cached.enhancePrompt == request.enhancePrompt,
-       cached.enhanceMaxTokens == request.enhanceMaxTokens
-    {
-      logger.info("Reusing cached prompt embeddings")
-      promptEmbeds = cached.promptEmbeds
-      negativeEmbeds = cached.negativeEmbeds
-      if let enhancedPrompt = cached.enhancedPrompt {
-        request.progressCallback?(ControlProgress(
-          stage: "Prompt enhanced",
-          stepIndex: 0, totalSteps: 0, fractionCompleted: 0,
-          enhancedPrompt: enhancedPrompt
-        ))
-      }
-    } else {
-      if request.enhancePrompt && transformer != nil {
-        let availableMemory = getAvailableMemory()
-        let textEncoderSize: UInt64 = 6 * 1024 * 1024 * 1024
-        if availableMemory < textEncoderSize {
-          logger.info("Low memory (\(availableMemory / 1024 / 1024)MB available), offloading transformer before enhancement...")
-          unloadTransformer()
-        } else {
-          logger.info("Sufficient memory (\(availableMemory / 1024 / 1024)MB available), keeping transformer loaded")
-        }
-      }
-      request.progressCallback?(ControlProgress(
-        stage: "Loading text encoder",
-        stepIndex: 0, totalSteps: 0, fractionCompleted: 0
-      ))
-      logger.info("Loading text encoder...")
-      let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
-      let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
-      let textEncoderWeights = try weightsMapper.loadTextEncoder()
-      ZImageWeightsMapping.applyTextEncoder(weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
-      var finalPrompt = request.prompt
-      var enhancedPromptForCache: String? = nil
-      if request.enhancePrompt {
-        request.progressCallback?(ControlProgress(
-          stage: "Enhancing prompt",
-          stepIndex: 0, totalSteps: 0, fractionCompleted: 0
-        ))
-        logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
-        let enhanceConfig = PromptEnhanceConfig(
-          maxNewTokens: request.enhanceMaxTokens,
-          temperature: 0.7,
-          topP: 0.9,
-          repetitionPenalty: 1.05
-        )
-        let enhanced = try textEncoder.enhancePrompt(request.prompt, tokenizer: tokenizer, config: enhanceConfig)
-        if enhanced.isEmpty {
-          logger.warning("Prompt enhancement incomplete (need more tokens), using original prompt")
-        } else {
-          logger.info("Enhanced prompt: \(enhanced)")
-          finalPrompt = enhanced
-          enhancedPromptForCache = enhanced
-          request.progressCallback?(ControlProgress(
-            stage: "Prompt enhanced",
-            stepIndex: 0, totalSteps: 0, fractionCompleted: 0,
-            enhancedPrompt: enhanced
-          ))
-        }
-        GPU.clearCache()
-      }
-      let (pe, _) = try encodePrompt(finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
-      promptEmbeds = pe
-      if doCFG {
-        let (ne, _) = try encodePrompt(request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
-        negativeEmbeds = ne
-        MLX.eval(promptEmbeds, ne)
-      } else {
-        negativeEmbeds = nil
-        MLX.eval(promptEmbeds)
-      }
-      cachedPromptEmbedding = CachedPromptEmbedding(
-        prompt: request.prompt,
-        negativePrompt: request.negativePrompt,
-        maxSequenceLength: request.maxSequenceLength,
-        promptEmbeds: promptEmbeds,
-        negativeEmbeds: negativeEmbeds,
-        enhancePrompt: request.enhancePrompt,
-        enhanceMaxTokens: request.enhanceMaxTokens,
-        enhancedPrompt: enhancedPromptForCache
-      )
-      logger.info("Text encoding complete, embeddings cached")
-    }
-    var controlContext: MLXArray? = nil
-    let controlCG: CGImage? = request.controlImageCG ?? (request.controlImage.flatMap { loadCGImage(from: $0) })
-    let inpaintCG: CGImage? = request.inpaintImageCG ?? (request.inpaintImage.flatMap { loadCGImage(from: $0) })
-    let maskCG: CGImage? = request.maskImageCG ?? (request.maskImage.flatMap { loadCGImage(from: $0) })
-    if controlCG != nil || inpaintCG != nil || maskCG != nil {
-      logger.info("Building control context (control=\(controlCG != nil), inpaint=\(inpaintCG != nil), mask=\(maskCG != nil))...")
-      let result = try buildControlContext(
-        controlImage: controlCG,
-        inpaintImage: inpaintCG,
-        maskImage: maskCG,
-        vae: vae,
-        vaeConfig: modelConfigs.vae,
-        targetHeight: request.height,
-        targetWidth: request.width
-      )
-      MLX.eval(result)
-      logger.info("Control context built, shape: \(result.shape)")
-      controlContext = result.asType(.bfloat16)
-    }
-    let vaeDivisor = modelConfigs.vae.latentDivisor
-    let latentH = max(1, request.height / vaeDivisor)
-    let latentW = max(1, request.width / vaeDivisor)
-    let shape: [Int] = [1, ZImageModelMetadata.Transformer.inChannels, latentH, latentW]
-    let randomKey: RandomStateOrKey? = request.seed.map { MLXRandom.key($0) }
-    let initialNoise = MLXRandom.normal(shape, loc: 0, scale: 1, key: randomKey)
-    var latents = initialNoise
-    let mu = calculateShift(
-      imageSeqLen: latentH * latentW,
-      baseSeqLen: modelConfigs.scheduler.baseImageSeqLen ?? 256,
-      maxSeqLen: modelConfigs.scheduler.maxImageSeqLen ?? 4096,
-      baseShift: modelConfigs.scheduler.baseShift ?? 0.5,
-      maxShift: modelConfigs.scheduler.maxShift ?? 1.15
-    )
-    let scheduler = FlowMatchEulerScheduler(
-      numInferenceSteps: request.steps,
-      config: modelConfigs.scheduler,
-      mu: modelConfigs.scheduler.useDynamicShifting ? mu : nil
-    )
-    let timestepsArray = scheduler.timesteps.asArray(Float.self)
-    if transformer == nil {
-      logger.info("Reloading transformer after prompt encoding...")
-      let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
-      let transformerModel = try loadControlTransformer(snapshot: snapshot, config: modelConfigs.transformer)
-      let transformerWeights = try weightsMapper.loadTransformer()
-      ZImageControlWeightsMapping.applyControlTransformer(
-        weights: transformerWeights,
-        to: transformerModel,
-        manifest: quantManifest,
-        logger: logger
-      )
-      transformer = transformerModel
-      loadedControlnetWeightsId = nil
-      if let controlnetSpec = request.controlnetWeights {
-        logger.info("Reloading controlnet weights...")
-        let result = try await loadControlnetWeights(
-          controlnetSpec: controlnetSpec,
-          preferredFile: request.controlnetWeightsFile,
-          progressCallback: request.progressCallback
-        )
-        ZImageControlWeightsMapping.applyControlnetWeights(
-          weights: result.weights,
-          to: transformer!,
-          manifest: result.manifest,
-          logger: logger
-        )
-        loadedControlnetWeightsId = controlnetSpec
-      }
-      if let loraConfig = request.lora {
-        try await applyLoRAIfNeeded(loraConfig)
-      }
-    }
-    logger.info("Running \(request.steps) denoising steps with control_context_scale=\(request.controlContextScale)...")
-    do {
-      guard let transformer = transformer else {
-        throw PipelineError.transformerNotLoaded
-      }
-      for stepIndex in 0 ..< request.steps {
-        try Task.checkCancellation()
-        request.progressCallback?(ControlProgress(
-          stage: "Denoising",
-          stepIndex: stepIndex,
-          totalSteps: request.steps,
-          fractionCompleted: Double(stepIndex) / Double(request.steps)
-        ))
-        let timestep = timestepsArray[stepIndex]
-        let normalizedTimestep = (1000.0 - timestep) / 1000.0
-        let timestepArray = MLXArray([normalizedTimestep], [1])
-        var modelLatents = latents
-        var embeds = promptEmbeds
-        if doCFG, let ne = negativeEmbeds {
-          modelLatents = MLX.concatenated([latents, latents], axis: 0)
-          embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
-        }
-        let noisePred = transformer.forward(
-          latents: modelLatents,
-          timestep: timestepArray,
-          promptEmbeds: embeds,
-          controlContext: controlContext,
-          controlContextScale: request.controlContextScale
-        )
-        let guidedNoise: MLXArray
-        if doCFG, negativeEmbeds != nil {
-          let batch = latents.dim(0)
-          let positive = noisePred[0 ..< batch, 0..., 0..., 0...]
-          let negative = noisePred[batch ..< batch * 2, 0..., 0..., 0...]
-          guidedNoise = positive + request.guidanceScale * (positive - negative)
-        } else {
-          guidedNoise = noisePred
-        }
-        latents = scheduler.step(modelOutput: -guidedNoise, timestepIndex: stepIndex, sample: latents)
-        MLX.eval(latents)
-      }
-      transformer.clearCache()
-    }
-    unloadTransformer()
-    request.progressCallback?(ControlProgress(
-      stage: "Denoising",
-      stepIndex: request.steps,
-      totalSteps: request.steps,
-      fractionCompleted: 1.0
-    ))
-    request.progressCallback?(ControlProgress(
-      stage: "Decoding",
-      stepIndex: request.steps,
-      totalSteps: request.steps,
-      fractionCompleted: 1.0
-    ))
-    logger.info("Denoising complete, decoding latents...")
-    let decoded = decodeLatents(latents, vae: vae, height: request.height, width: request.width)
+    let decoded = try await generateCore(request)
     let imageData = try QwenImageIO.imageData(from: decoded)
     logger.info("Generated image data (\(imageData.count) bytes)")
     return imageData
   }
   #endif
-  private func decodeLatents(_ latents: MLXArray, vae: AutoencoderKL, height: Int, width: Int) -> MLXArray {
-    PipelineUtilities.decodeLatents(latents, vae: vae, height: height, width: width)
-  }
 
   private struct ControlnetWeightsResult {
     let weights: [String: MLXArray]
@@ -1428,7 +1043,7 @@ public class ZImageControlPipeline {
   ) async throws -> ControlnetWeightsResult {
     let fm = FileManager.default
     let localURL = URL(fileURLWithPath: controlnetSpec)
-    if fm.fileExists(atPath: localURL.path) && controlnetSpec.hasSuffix(".safetensors") {
+    if fm.fileExists(atPath: localURL.path), controlnetSpec.hasSuffix(".safetensors") {
       progressCallback?(ControlProgress(
         stage: "Loading ControlNet",
         stepIndex: 0, totalSteps: 0, fractionCompleted: 0
@@ -1438,7 +1053,7 @@ public class ZImageControlPipeline {
       return ControlnetWeightsResult(weights: weights, manifest: nil)
     }
     var isDirectory: ObjCBool = false
-    if fm.fileExists(atPath: localURL.path, isDirectory: &isDirectory) && isDirectory.boolValue {
+    if fm.fileExists(atPath: localURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
       progressCallback?(ControlProgress(
         stage: "Loading ControlNet",
         stepIndex: 0, totalSteps: 0, fractionCompleted: 0
@@ -1480,7 +1095,7 @@ public class ZImageControlPipeline {
     }
     let contents = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
     var safetensorsFiles = contents.filter { $0.pathExtension == "safetensors" }
-    if let preferredFile = preferredFile {
+    if let preferredFile {
       safetensorsFiles = safetensorsFiles.filter { $0.lastPathComponent == preferredFile }
       if safetensorsFiles.isEmpty {
         throw PipelineError.weightsMissing("Specified controlnet file '\(preferredFile)' not found in directory: \(directory.path)")
@@ -1516,367 +1131,5 @@ public class ZImageControlPipeline {
     }
     logger.info("Loaded \(tensors.count) controlnet tensors")
     return tensors
-  }
-
-  private func calculateShift(
-    imageSeqLen: Int,
-    baseSeqLen: Int,
-    maxSeqLen: Int,
-    baseShift: Float,
-    maxShift: Float
-  ) -> Float {
-    PipelineUtilities.calculateShift(
-      imageSeqLen: imageSeqLen,
-      baseSeqLen: baseSeqLen,
-      maxSeqLen: maxSeqLen,
-      baseShift: baseShift,
-      maxShift: maxShift
-    )
-  }
-}
-
-public enum ZImageControlWeightsMapping {
-  private static func transformerMapping(_ weights: [String: MLXArray]) -> [String: MLXArray] {
-    var mapped: [String: MLXArray] = [:]
-    for (k, v) in weights {
-      mapped["transformer.\(k)"] = v
-    }
-    return mapped
-  }
-
-  private static func applyToModule(_ module: Module, weights: [String: MLXArray], prefix: String, logger: Logger) {
-    applyToModule(module, weights: weights, prefix: prefix, logger: logger, tensorNameTransform: nil)
-  }
-
-  private static func applyToModule(
-    _ module: Module,
-    weights: [String: MLXArray],
-    prefix: String,
-    logger: Logger,
-    tensorNameTransform: ((String) -> String)?
-  ) {
-    let params = module.parameters().flattened()
-    var updates: [(String, MLXArray)] = []
-    for (key, _) in params {
-      let tensorKey: String
-      if let transform = tensorNameTransform {
-        tensorKey = transform("\(prefix).\(key)")
-      } else {
-        tensorKey = "\(prefix).\(key)"
-      }
-      let candidates = [key, tensorKey]
-      if let found = candidates.compactMap({ weights[$0] }).first {
-        updates.append((key, found))
-      }
-    }
-    for (weightKey, tensor) in weights {
-      let expectedPrefix: String
-      if let transform = tensorNameTransform {
-        expectedPrefix = transform(prefix)
-      } else {
-        expectedPrefix = prefix
-      }
-      guard weightKey.hasPrefix("\(expectedPrefix).") else { continue }
-      if weightKey.hasSuffix(".scales") || weightKey.hasSuffix(".biases") {
-        var paramKey = String(weightKey.dropFirst("\(expectedPrefix).".count))
-        if tensorNameTransform != nil {
-          paramKey = paramKey.replacingOccurrences(of: "feed_forward", with: "feedForward")
-          paramKey = paramKey.replacingOccurrences(of: "to_q", with: "toQ")
-          paramKey = paramKey.replacingOccurrences(of: "to_k", with: "toK")
-          paramKey = paramKey.replacingOccurrences(of: "to_v", with: "toV")
-          paramKey = paramKey.replacingOccurrences(of: "to_out", with: "toOut")
-          paramKey = paramKey.replacingOccurrences(of: "before_proj", with: "beforeProj")
-          paramKey = paramKey.replacingOccurrences(of: "after_proj", with: "afterProj")
-          paramKey = paramKey.replacingOccurrences(of: "norm_q", with: "normQ")
-          paramKey = paramKey.replacingOccurrences(of: "norm_k", with: "normK")
-          paramKey = paramKey.replacingOccurrences(of: "attention_norm1", with: "attentionNorm1")
-          paramKey = paramKey.replacingOccurrences(of: "attention_norm2", with: "attentionNorm2")
-          paramKey = paramKey.replacingOccurrences(of: "ffn_norm1", with: "ffnNorm1")
-          paramKey = paramKey.replacingOccurrences(of: "ffn_norm2", with: "ffnNorm2")
-          paramKey = paramKey.replacingOccurrences(of: "adaLN_modulation", with: "adaLN")
-        }
-        if !updates.contains(where: { $0.0 == paramKey }) {
-          updates.append((paramKey, tensor))
-        }
-      }
-    }
-    if updates.isEmpty {
-      logger.warning("\(prefix) received no matching weights; skipping apply.")
-      return
-    }
-    do {
-      let nd = ModuleParameters.unflattened(updates)
-      try module.update(parameters: nd, verify: [.shapeMismatch])
-    } catch {
-      logger.error("Failed to apply weights to \(prefix): \(error)")
-    }
-  }
-
-  public static func applyControlTransformer(
-    weights: [String: MLXArray],
-    to transformer: ZImageControlTransformer2DModel,
-    manifest: ZImageQuantizationManifest?,
-    logger: Logger
-  ) {
-    if let manifest = manifest {
-      let availableKeys = Set(weights.keys)
-      ZImageQuantizer.applyQuantization(
-        to: transformer,
-        manifest: manifest,
-        availableKeys: availableKeys,
-        tensorNameTransform: ZImageQuantizer.transformerTensorName
-      )
-    }
-    let groupSize = manifest?.groupSize ?? 32
-    let bits = manifest?.bits ?? 8
-    let mapped = transformerMapping(weights)
-    applyToModule(transformer, weights: mapped, prefix: "transformer", logger: logger)
-    transformer.loadCapEmbedderWeights(from: weights)
-    transformer.loadXEmbedderWeights(from: weights, groupSize: groupSize, bits: bits)
-    transformer.loadFinalLayerWeights(from: weights, groupSize: groupSize, bits: bits)
-    transformer.setPadTokens(xPad: weights["x_pad_token"], capPad: weights["cap_pad_token"])
-    logger.info("Applied base transformer weights to control transformer")
-  }
-
-  public static func applyControlnetWeights(
-    weights: [String: MLXArray],
-    to transformer: ZImageControlTransformer2DModel,
-    manifest: ZImageQuantizationManifest?,
-    logger: Logger
-  ) {
-    let isQuantized = manifest != nil
-    if let manifest = manifest {
-      let availableKeys = Set(weights.keys)
-      ZImageQuantizer.applyControlnetQuantization(
-        to: transformer,
-        manifest: manifest,
-        availableKeys: availableKeys
-      )
-      logger.info("Applied quantization to controlnet (\(manifest.bits)-bit, group_size=\(manifest.groupSize))")
-    }
-    transformer.loadControlXEmbedderWeights(from: weights)
-    for (idx, block) in transformer.controlNoiseRefiner.enumerated() {
-      if isQuantized {
-        let prefix = "controlNoiseRefiner.\(idx)"
-        applyToModule(
-          block, weights: weights,
-          prefix: prefix,
-          logger: logger,
-          tensorNameTransform: ZImageQuantizer.controlnetTensorName
-        )
-      } else {
-        let prefix = "control_noise_refiner.\(idx)"
-        applyControlTransformerBlockWeights(weights: weights, prefix: prefix, to: block)
-      }
-    }
-    for (idx, block) in transformer.controlLayers.enumerated() {
-      if isQuantized {
-        let prefix = "controlLayers.\(idx)"
-        applyToModule(
-          block, weights: weights,
-          prefix: prefix,
-          logger: logger,
-          tensorNameTransform: ZImageQuantizer.controlnetTensorName
-        )
-      } else {
-        let prefix = "control_layers.\(idx)"
-        applyControlTransformerBlockWeights(weights: weights, prefix: prefix, to: block)
-      }
-    }
-    logger.info("Applied controlnet weights")
-  }
-
-  private static func applyTransformerBlockWeights(
-    weights: [String: MLXArray],
-    prefix: String,
-    to block: ZImageTransformerBlock
-  ) {
-    if let w = weights["\(prefix).attention.to_q.weight"] {
-      block.attention.toQ.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.to_k.weight"] {
-      block.attention.toK.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.to_v.weight"] {
-      block.attention.toV.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.to_out.0.weight"] {
-      block.attention.toOut[0].weight._updateInternal(w)
-    }
-    if let b = weights["\(prefix).attention.to_out.0.bias"] {
-      block.attention.toOut[0].bias?._updateInternal(b)
-    }
-    if let w = weights["\(prefix).attention.norm_q.weight"] {
-      block.attention.normQ?.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.norm_k.weight"] {
-      block.attention.normK?.weight._updateInternal(w)
-    }
-    if let adaLN = block.adaLN, adaLN.count > 0 {
-      if let w = weights["\(prefix).adaLN_modulation.0.weight"] {
-        adaLN[0].weight._updateInternal(w)
-      }
-      if let b = weights["\(prefix).adaLN_modulation.0.bias"] {
-        adaLN[0].bias?._updateInternal(b)
-      }
-    }
-    if let w = weights["\(prefix).attention_norm1.weight"] {
-      block.attentionNorm1.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).ffn_norm1.weight"] {
-      block.ffnNorm1.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention_norm2.weight"] {
-      block.attentionNorm2.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).ffn_norm2.weight"] {
-      block.ffnNorm2.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).feed_forward.w1.weight"] {
-      block.feedForward.w1.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).feed_forward.w2.weight"] {
-      block.feedForward.w2.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).feed_forward.w3.weight"] {
-      block.feedForward.w3.weight._updateInternal(w)
-    }
-  }
-
-  private static func applyBaseTransformerBlockWeights(
-    weights: [String: MLXArray],
-    prefix: String,
-    to block: BaseZImageTransformerBlock
-  ) {
-    if let w = weights["\(prefix).attention.to_q.weight"] {
-      block.attention.toQ.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.to_k.weight"] {
-      block.attention.toK.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.to_v.weight"] {
-      block.attention.toV.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.to_out.0.weight"] {
-      block.attention.toOut[0].weight._updateInternal(w)
-    }
-    if let b = weights["\(prefix).attention.to_out.0.bias"] {
-      block.attention.toOut[0].bias?._updateInternal(b)
-    }
-    if let w = weights["\(prefix).attention.norm_q.weight"] {
-      block.attention.normQ?.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.norm_k.weight"] {
-      block.attention.normK?.weight._updateInternal(w)
-    }
-    if let adaLN = block.adaLN, adaLN.count > 0 {
-      if let w = weights["\(prefix).adaLN_modulation.0.weight"] {
-        adaLN[0].weight._updateInternal(w)
-      } else if let w = weights["\(prefix).adaLN_modulation.1.weight"] {
-        adaLN[0].weight._updateInternal(w)
-      }
-      if let b = weights["\(prefix).adaLN_modulation.0.bias"] {
-        adaLN[0].bias?._updateInternal(b)
-      } else if let b = weights["\(prefix).adaLN_modulation.1.bias"] {
-        adaLN[0].bias?._updateInternal(b)
-      }
-    }
-    if let w = weights["\(prefix).attention_norm1.weight"] {
-      block.attentionNorm1.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).ffn_norm1.weight"] {
-      block.ffnNorm1.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention_norm2.weight"] {
-      block.attentionNorm2.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).ffn_norm2.weight"] {
-      block.ffnNorm2.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).feed_forward.w1.weight"] {
-      block.feedForward.w1.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).feed_forward.w2.weight"] {
-      block.feedForward.w2.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).feed_forward.w3.weight"] {
-      block.feedForward.w3.weight._updateInternal(w)
-    }
-  }
-
-  // swiftlint:disable:next cyclomatic_complexity
-  private static func applyControlTransformerBlockWeights(
-    weights: [String: MLXArray],
-    prefix: String,
-    to block: ZImageControlTransformerBlock
-  ) {
-    if let beforeProj = block.beforeProj {
-      if let w = weights["\(prefix).before_proj.weight"] {
-        beforeProj.weight._updateInternal(w)
-      }
-      if let b = weights["\(prefix).before_proj.bias"] {
-        beforeProj.bias?._updateInternal(b)
-      }
-    }
-    if let w = weights["\(prefix).after_proj.weight"] {
-      block.afterProj.weight._updateInternal(w)
-    }
-    if let b = weights["\(prefix).after_proj.bias"] {
-      block.afterProj.bias?._updateInternal(b)
-    }
-    if let w = weights["\(prefix).attention.to_q.weight"] {
-      block.attention.toQ.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.to_k.weight"] {
-      block.attention.toK.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.to_v.weight"] {
-      block.attention.toV.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.to_out.0.weight"] {
-      block.attention.toOut[0].weight._updateInternal(w)
-    }
-    if let b = weights["\(prefix).attention.to_out.0.bias"] {
-      block.attention.toOut[0].bias?._updateInternal(b)
-    }
-    if let w = weights["\(prefix).attention.norm_q.weight"] {
-      block.attention.normQ?.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention.norm_k.weight"] {
-      block.attention.normK?.weight._updateInternal(w)
-    }
-    if let adaLN = block.adaLN, adaLN.count > 0 {
-      if let w = weights["\(prefix).adaLN_modulation.0.weight"] {
-        adaLN[0].weight._updateInternal(w)
-      } else if let w = weights["\(prefix).adaLN_modulation.1.weight"] {
-        adaLN[0].weight._updateInternal(w)
-      }
-      if let b = weights["\(prefix).adaLN_modulation.0.bias"] {
-        adaLN[0].bias?._updateInternal(b)
-      } else if let b = weights["\(prefix).adaLN_modulation.1.bias"] {
-        adaLN[0].bias?._updateInternal(b)
-      }
-    }
-    if let w = weights["\(prefix).attention_norm1.weight"] {
-      block.attentionNorm1.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).ffn_norm1.weight"] {
-      block.ffnNorm1.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).attention_norm2.weight"] {
-      block.attentionNorm2.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).ffn_norm2.weight"] {
-      block.ffnNorm2.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).feed_forward.w1.weight"] {
-      block.feedForward.w1.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).feed_forward.w2.weight"] {
-      block.feedForward.w2.weight._updateInternal(w)
-    }
-    if let w = weights["\(prefix).feed_forward.w3.weight"] {
-      block.feedForward.w3.weight._updateInternal(w)
-    }
   }
 }

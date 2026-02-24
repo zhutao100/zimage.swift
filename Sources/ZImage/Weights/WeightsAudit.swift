@@ -1,9 +1,9 @@
 import Foundation
 import Logging
-import MLXNN
 import MLX
+import MLXNN
 
-struct WeightsAudit {
+enum WeightsAudit {
   struct Summary {
     let matched: Int
     let missing: [String]
@@ -46,5 +46,35 @@ struct WeightsAudit {
     }
 
     return Summary(matched: matched, missing: missingKeys, extra: Array(remaining))
+  }
+
+  static func auditShapeMismatches(
+    module: Module,
+    weights: [String: MLXArray],
+    transpose4DTensors: Bool,
+    logger: Logger,
+    sample: Int = 10
+  ) -> [String] {
+    let params = module.parameters().flattened()
+    var mismatches: [String] = []
+    mismatches.reserveCapacity(8)
+
+    for (key, param) in params {
+      guard var tensor = weights[key] else { continue }
+      if transpose4DTensors, tensor.ndim == 4 {
+        tensor = tensor.transposed(0, 2, 3, 1)
+      }
+      if tensor.shape != param.shape {
+        mismatches.append("\(key) expected \(param.shape) got \(tensor.shape)")
+      }
+    }
+
+    if !mismatches.isEmpty {
+      let sampleList = mismatches.prefix(max(0, sample)).joined(separator: "; ")
+      let suffix = mismatches.count > sample ? "; ..." : ""
+      logger.warning("Found \(mismatches.count) weight shape mismatches (sample: \(sampleList)\(suffix))")
+    }
+
+    return mismatches
   }
 }

@@ -17,16 +17,13 @@ enum PipelineSnapshot {
       ZImageFiles.vaeConfig,
     ]
 
-    if let weightsVariant, !weightsVariant.isEmpty {
-      let variant = weightsVariant.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !variant.isEmpty {
-        patterns.append("vae/*.\(variant).safetensors")
-        patterns.append("vae/*\(variant)*.safetensors")
-        patterns.append("vae/*.\(variant).safetensors.index.json")
-        patterns.append("vae/*\(variant)*.safetensors.index.json")
-        patterns.append("vae/*.safetensors.index.json")
-        return patterns
-      }
+    if let variant = ZImageFiles.normalizedWeightsVariant(weightsVariant) {
+      patterns.append("vae/*.\(variant).safetensors")
+      patterns.append("vae/*\(variant)*.safetensors")
+      patterns.append("vae/*.\(variant).safetensors.index.json")
+      patterns.append("vae/*\(variant)*.safetensors.index.json")
+      patterns.append("vae/*.safetensors.index.json")
+      return patterns
     }
 
     patterns.append("vae/*.safetensors")
@@ -35,19 +32,16 @@ enum PipelineSnapshot {
   }
 
   static func modelFilePatterns(weightsVariant: String?) -> [String] {
-    if let weightsVariant, !weightsVariant.isEmpty {
-      let variant = weightsVariant.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !variant.isEmpty {
-        return [
-          "*.\(variant).safetensors",
-          "*\(variant)*.safetensors",
-          "*.\(variant).safetensors.index.json",
-          "*\(variant)*.safetensors.index.json",
-          "*.safetensors.index.json",
-          "*.json",
-          "tokenizer/*",
-        ]
-      }
+    if let variant = ZImageFiles.normalizedWeightsVariant(weightsVariant) {
+      return [
+        "*.\(variant).safetensors",
+        "*\(variant)*.safetensors",
+        "*.\(variant).safetensors.index.json",
+        "*\(variant)*.safetensors.index.json",
+        "*.safetensors.index.json",
+        "*.json",
+        "tokenizer/*",
+      ]
     }
 
     return ["*.safetensors", "*.json", "tokenizer/*"]
