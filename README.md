@@ -21,7 +21,7 @@ Ships as:
 ## Requirements
 
 - Apple Silicon
-- macOS 14.0+ (CLI) / iOS 16+ (library target)
+- macOS 14.0+ (CLI) / iOS 17+ (library target)
 - Swift 6.0+ (CI uses Xcode 16.0)
 
 ## Quickstart (CLI)

@@ -3,17 +3,17 @@ import PackageDescription
 
 let package = Package(
   name: "zimage.swift",
-  platforms: [.macOS(.v14), .iOS(.v16)],
+  platforms: [.macOS(.v14), .iOS(.v17)],
   products: [
     .library(name: "ZImage", targets: ["ZImage"]),
     .executable(name: "ZImageCLI", targets: ["ZImageCLI"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.29.1")),
+    .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.30.6")),
     .package(url: "https://github.com/huggingface/swift-huggingface.git", from: "0.7.0"),
     .package(
       url: "https://github.com/huggingface/swift-transformers",
-      .upToNextMinor(from: "0.1.24")
+      .upToNextMinor(from: "1.1.9")
     ),
     .package(url: "https://github.com/apple/swift-log.git", from: "1.6.4"),
   ],
@@ -27,7 +27,8 @@ let package = Package(
         .product(name: "MLXOptimizers", package: "mlx-swift"),
         .product(name: "MLXRandom", package: "mlx-swift"),
         .product(name: "HuggingFace", package: "swift-huggingface"),
-        .product(name: "Transformers", package: "swift-transformers"),
+        .product(name: "Hub", package: "swift-transformers"),
+        .product(name: "Tokenizers", package: "swift-transformers"),
         .product(name: "Logging", package: "swift-log"),
       ],
       path: "Sources/ZImage"

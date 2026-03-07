@@ -75,7 +75,7 @@ public class LoRAQuantizedLinear: QuantizedLinear, DynamicLoRACapable {
 
   public override func callAsFunction(_ x: MLXArray) -> MLXArray {
 
-    var result = MLX.quantizedMatmul(
+    var result = MLX.quantizedMM(
       x,
       weight,
       scales: scales,

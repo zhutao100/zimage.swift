@@ -122,7 +122,7 @@ enum ZImageCLI {
     }
 
     if let limit = cacheLimit {
-      GPU.set(cacheLimit: limit * 1024 * 1024)
+      Memory.cacheLimit = limit * 1024 * 1024
       logger.info("GPU cache limit set to \(limit)MB")
     }
     let loraConfig: LoRAConfiguration? = loraPath.map { path in
@@ -575,7 +575,7 @@ enum ZImageCLI {
     }
 
     if let limit = cacheLimit {
-      GPU.set(cacheLimit: limit * 1024 * 1024)
+      Memory.cacheLimit = limit * 1024 * 1024
       logger.info("GPU cache limit set to \(limit)MB")
     }
 

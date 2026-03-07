@@ -1,6 +1,7 @@
 import Foundation
 import MLX
 import MLXRandom
+import Tokenizers
 
 public struct PromptEnhanceConfig {
   public var maxNewTokens: Int
@@ -82,7 +83,7 @@ extension QwenTextEncoder {
     config: PromptEnhanceConfig = .init()
   ) throws -> String {
     let userMessage = "用户输入 prompt: \(prompt)"
-    let messages: [[String: Any]] = [
+    let messages: [Message] = [
       ["role": "system", "content": Self.peSystemPrompt],
       ["role": "user", "content": userMessage],
     ]

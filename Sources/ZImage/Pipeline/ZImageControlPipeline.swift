@@ -201,7 +201,7 @@ public class ZImageControlPipeline {
   private func clearControlnetWeights() {
     guard let transformer else { return }
     logger.info("Clearing controlnet weights to free GPU memory...")
-    for (key, linear) in transformer.controlAllXEmbedder {
+    for (_, linear) in transformer.controlAllXEmbedder {
       let zeroWeight = MLXArray.zeros(like: linear.weight)
       linear.weight._updateInternal(zeroWeight)
       if let bias = linear.bias {
@@ -215,7 +215,7 @@ public class ZImageControlPipeline {
     for block in transformer.controlLayers {
       zeroOutControlTransformerBlock(block)
     }
-    GPU.clearCache()
+    Memory.clearCache()
     logger.info("Controlnet weights cleared")
   }
 
@@ -605,7 +605,7 @@ public class ZImageControlPipeline {
       LoRAApplicator.clearDynamicLoRA(from: transformer, logger: logger)
       currentLoRA = nil
       currentLoRAConfig = nil
-      GPU.clearCache()
+      Memory.clearCache()
       logger.info("LoRA unloaded")
     }
   }
@@ -615,7 +615,7 @@ public class ZImageControlPipeline {
     currentLoRA = nil
     currentLoRAConfig = nil
     loadedControlnetWeightsId = nil
-    GPU.clearCache()
+    Memory.clearCache()
     logger.info("Transformer unloaded for memory optimization")
   }
 
@@ -674,7 +674,7 @@ public class ZImageControlPipeline {
         currentLoRA = nil
         currentLoRAConfig = nil
         cachedPromptEmbedding = nil
-        GPU.clearCache()
+        Memory.clearCache()
       } else {
         self.tokenizer = nil
         self.vae = nil
@@ -686,7 +686,7 @@ public class ZImageControlPipeline {
         currentLoRA = nil
         currentLoRAConfig = nil
         cachedPromptEmbedding = nil
-        GPU.clearCache()
+        Memory.clearCache()
       }
       logger.info("Loading model \(requestedModelId)...")
       let snapshotValidator: (@Sendable (URL) -> Bool)? =
@@ -875,7 +875,7 @@ public class ZImageControlPipeline {
               enhancedPrompt: enhanced
             ))
         }
-        GPU.clearCache()
+        Memory.clearCache()
       }
       let (pe, _) = try encodePrompt(
         finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
@@ -943,7 +943,7 @@ public class ZImageControlPipeline {
     let latentH = max(1, request.height / vaeDivisor)
     let latentW = max(1, request.width / vaeDivisor)
     let shape: [Int] = [1, ZImageModelMetadata.Transformer.inChannels, latentH, latentW]
-    let randomKey: RandomStateOrKey? = request.seed.map { MLXRandom.key($0) }
+    let randomKey: MLXArray? = request.seed.map { MLXRandom.key($0) }
     let initialNoise = MLXRandom.normal(shape, loc: 0, scale: 1, key: randomKey)
     var latents = initialNoise
     let mu = PipelineUtilities.calculateShift(
@@ -1026,7 +1026,8 @@ public class ZImageControlPipeline {
           let batch = latents.dim(0)
           let positive = noisePred[0..<batch, 0..., 0..., 0...]
           let negative = noisePred[batch..<batch * 2, 0..., 0..., 0...]
-          guidedNoise = positive + request.guidanceScale * (positive - negative)
+          let guidanceDelta = subtract(positive, negative)
+          guidedNoise = add(positive, multiply(request.guidanceScale, guidanceDelta))
         } else {
           guidedNoise = noisePred
         }

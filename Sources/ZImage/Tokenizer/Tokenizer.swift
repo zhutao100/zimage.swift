@@ -265,7 +265,7 @@ public final class QwenTokenizer {
     attentionSequences.reserveCapacity(prompts.count)
 
     for prompt in prompts {
-      let messages: [[String: Any]] = [
+      let messages: [Message] = [
         ["role": "user", "content": prompt]
       ]
       let tokens = try tokenizer.applyChatTemplate(messages: messages)
@@ -335,7 +335,7 @@ public final class QwenTokenizer {
   }
 
   public func encodeChatForGeneration(
-    messages: [[String: Any]],
+    messages: [Message],
     maxLength: Int? = nil
   ) throws -> [Int] {
     var text = ""
