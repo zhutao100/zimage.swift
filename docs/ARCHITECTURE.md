@@ -119,6 +119,8 @@ Key code:
 
 The VAE mid-block self-attention in `Sources/ZImage/Model/VAE/AutoencoderKL.swift` now chunks the query dimension internally to reduce large-image MLX cache pressure without changing weights. The supported runtime probe for this path is `ZImageCLI control --log-control-memory`.
 
+Inside the ControlNet denoiser, accumulated skip hints are now carried incrementally instead of being re-stacked at every control block. That keeps the external `ZImageControlBlockSamples` contract unchanged while avoiding a large denoising-memory multiplier.
+
 ## Tests
 
 - Unit tests: `Tests/ZImageTests/` (fast, no model downloads)

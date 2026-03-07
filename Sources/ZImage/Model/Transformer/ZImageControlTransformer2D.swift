@@ -270,10 +270,10 @@ public final class ZImageControlNetModel: Module {
 
     let adalnInput = tEmb.asType(controlEmbed.dtype)
 
-    var control = controlEmbed
+    var controlState = ZImageControlHintState(control: controlEmbed)
     for refinerBlock in controlNoiseRefiner {
-      control = refinerBlock(
-        control,
+      controlState = refinerBlock(
+        controlState,
         x: noiseStream,
         attnMask: nil,
         freqsCis: imgFreqs,
@@ -281,13 +281,13 @@ public final class ZImageControlNetModel: Module {
       )
     }
 
-    let numHints = control.dim(0) - 1
-    var hints: ZImageControlBlockSamples = [:]
-    for i in 0..<numHints {
-      hints[controlRefinerLayersPlaces[i]] = control[i] * conditioningScale
-    }
-
-    return (hints, control[numHints])
+    return (
+      controlState.scaledHints(
+        layerPlaces: controlRefinerLayersPlaces,
+        conditioningScale: conditioningScale
+      ),
+      controlState.control
+    )
   }
 
   private func forwardControlLayers(
@@ -302,24 +302,17 @@ public final class ZImageControlNetModel: Module {
 
     let adalnInput = tEmb.asType(unified.dtype)
     let controlUnified = MLX.concatenated([refinedControl, capFeats], axis: 1)
-    var control = controlUnified
+    var controlState = ZImageControlHintState(control: controlUnified)
     for controlLayer in controlLayers {
-      control = controlLayer(
-        control,
+      controlState = controlLayer(
+        controlState,
         x: unified,
         attnMask: nil,
         freqsCis: unifiedFreqs,
         adalnInput: adalnInput
       )
     }
-
-    let numHints = control.dim(0) - 1
-    var hints: ZImageControlBlockSamples = [:]
-    for i in 0..<numHints {
-      hints[controlLayersPlaces[i]] = control[i] * conditioningScale
-    }
-
-    return hints
+    return controlState.scaledHints(layerPlaces: controlLayersPlaces, conditioningScale: conditioningScale)
   }
 
   public func forward(

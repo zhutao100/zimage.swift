@@ -2,7 +2,7 @@
 
 This plan turns the validated findings in `docs/debug_notes/control-context-memory-remediation.md` into a measured implementation sequence.
 
-Execution status: in progress on March 7, 2026.
+Execution status: completed on March 7, 2026.
 
 ## Scope
 
@@ -141,7 +141,7 @@ Acceptance criteria:
 
 ## Phase 3: Incremental Control Hint Accumulation
 
-Status: pending
+Status: completed on March 7, 2026
 
 Objective:
 
@@ -230,3 +230,30 @@ Acceptance criteria:
     - the control build now starts from a materially lower resident baseline than phase 1 because the full VAE no longer stays live between prompt encoding and control-context construction
     - the post-build reload boundary stayed clean, while maximum RSS and peak memory footprint both improved modestly again
     - the fixed-seed control output remained bit-identical to phase 0 and phase 1
+- Phase 3: completed on March 7, 2026.
+  - Scope landed:
+    - replace per-block stacked hint transport with `ZImageControlHintState`
+    - keep accumulated hints and current control state separate inside the control transformer path
+    - preserve the legacy stacked representation only in the compatibility wrapper used by targeted tests
+    - add `ControlTransformerBlockTests` to prove the state-based path matches the legacy stacked path
+  - Phase 3 high-resolution memory probe:
+    - `prompt-embeddings.after-clear-cache`: resident `33.81 GiB`, active `29.18 GiB`, cache `0 B`
+    - `control-context.after-baseline-reduction`: resident `1012.41 MiB`, active `67.87 MiB`, cache `0 B`
+    - `control-context.after-eval`: resident `364.31 MiB`, active `71.36 MiB`, cache `28.08 GiB`
+    - `control-context.after-clear-cache`: resident `323.81 MiB`, active `71.36 MiB`, cache `0 B`
+    - `denoising.before-start`: resident `29.50 GiB`, active `29.19 GiB`, cache `65.30 MiB`
+    - `decode.after-eval`: resident `419.42 MiB`, active `127.48 MiB`, cache `39.00 GiB`, MLX peak `37.02 GiB`
+    - `/usr/bin/time -l` maximum resident set size: `42,656,612,352` bytes
+    - `/usr/bin/time -l` peak memory footprint: `59,328,863,512` bytes
+  - Phase 3 fixed-seed quality probe:
+    - output SHA-256: `2afd1fa9ba4398ad2b8b53510f44d602d5d7d5cc2631cee99d35c6d0752f8f70`
+    - phase 3 vs phase 0 MAE: `0.0000`
+    - phase 3 vs phase 0 max abs pixel delta: `0`
+    - phase 3 vs phase 0 PSNR: `inf`
+    - phase 3 vs phase 2 MAE: `0.0000`
+    - phase 3 vs phase 2 max abs pixel delta: `0`
+    - phase 3 vs phase 2 PSNR: `inf`
+  - Assessment:
+    - the denoising-memory target for phase 3 was met: peak memory footprint dropped by `27,251,359,768` bytes (`25.38 GiB`) versus phase 2 while maximum RSS stayed effectively flat
+    - the `control-context.after-baseline-reduction` resident marker rose to about `1.0 GiB`, but active bytes and cache bytes stayed low and the surrounding phases remained aligned with phase 2; this looks like resident-accounting variation rather than renewed active pressure
+    - the fixed-seed control output remained bit-identical to every earlier phase

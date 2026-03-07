@@ -15,10 +15,11 @@ This note replaces older conclusions that became partially stale after the contr
   - `Sources/ZImage/Model/Transformer/ZImageControlTransformerBlock.swift`
 - Source inspection of the local Diffusers reference:
   - `~/workspace/custom-builds/diffusers/src/diffusers/pipelines/z_image/pipeline_z_image_controlnet.py`
-- Three measured high-resolution control probes on March 7, 2026:
+- Four measured high-resolution control probes on March 7, 2026:
   - phase 0 baseline before the post-build cache-release change
   - phase 1 follow-up after the post-build cache-release change
   - phase 2 follow-up after the on-demand VAE encoder / deferred decoder split
+  - phase 3 follow-up after the incremental ControlNet hint transport change
 
 ```bash
 ./.build/xcode/Build/Products/Release/ZImageCLI control \
@@ -40,10 +41,10 @@ Diffusers was not executed in this validation pass. Any statement below about Di
 
 ## Current Verdict
 
-The large control-path memory footprint is still not caused by the stored `controlContext` tensor itself. After phase 2 landed, the current dominant contributors are:
+The large control-path memory footprint is still not caused by the stored `controlContext` tensor itself. After phase 3 landed, the current dominant contributors are:
 
 1. full-resolution VAE encode during `buildControlContext(...)`
-2. repeated ControlNet hint stacking during denoising
+2. the remaining transformer and ControlNet denoising activations after the stacked-hint transport was removed
 3. final decode-time VAE residency, which is now deferred and bounded rather than overlapping the whole control lifecycle
 
 The final control tensor shape from the measured high-resolution run was `[1, 33, 1, 288, 192]`. That is only a few MiB in bf16 or fp32. The large footprint comes from how it is built and what remains cached afterward, not from the tensor that is ultimately kept.
@@ -56,6 +57,7 @@ These older failure modes are no longer current:
 - prompt-embedding cache cleanup already happens before the control build begins.
 - the VAE mid-block self-attention path is query-chunked by default via `VAEAttention.defaultQueryChunkSize = 1024`.
 - the control pipeline now uses an encoder-only VAE for control/inpaint encode and a decoder-only VAE for final decode.
+- ControlNet hint transport now keeps the current control state separate from accumulated skip hints instead of restacking them at every control block.
 - the control path now materializes the stored control-context tensor, clears cache immediately, and logs `control-context.after-clear-cache` before transformer/controlnet reload.
 - `--log-control-memory` already emits resident, active, cache, and peak markers around the main control-path phases.
 
@@ -125,17 +127,34 @@ Measured effect on the high-resolution probe versus phase 1:
 
 The fixed-seed phase 2 output stayed bit-identical to phase 0 and phase 1.
 
-### 3. Denoising still pays for stacked ControlNet hint transport
+### 3. Phase 3 removed repeated stacked ControlNet hint transport
 
-`ZImageControlTransformerBlock` still returns `MLX.stacked(allC, axis: 0)` after appending the new skip hint and updated control state.
+`ZImageControlTransformerBlock` no longer rebuilds `MLX.stacked(allC, axis: 0)` at every block.
 
-That means each control layer repeatedly rebuilds a stacked tensor containing:
+The control path now carries:
 
-- all prior hints
-- the new hint
 - the current control state
+- an incrementally grown hint list
 
-This is structurally heavier than carrying the current control state plus an incrementally grown hint list, and it directly targets denoising memory rather than the control-context build spike.
+The legacy stacked representation is now only materialized in the compatibility wrapper used by targeted tests. The production `ZImageControlNetModel` path converts the accumulated hints to `ZImageControlBlockSamples` at the transformer boundary instead of rebuilding a stacked tensor at every control block.
+
+Measured effect on the high-resolution probe versus phase 2:
+
+- `/usr/bin/time -l` peak memory footprint dropped from `86,580,223,280` bytes to `59,328,863,512` bytes on the repeat run
+- `/usr/bin/time -l` maximum resident set size stayed effectively flat:
+  - phase 2: `42,659,020,800` bytes
+  - phase 3 repeat: `42,656,612,352` bytes
+- the fixed-seed phase 3 output stayed bit-identical to phase 0, phase 1, and phase 2
+
+One marker moved in a less intuitive way:
+
+- `control-context.after-baseline-reduction` resident bytes rose to about `1.0 GiB`, while active bytes stayed at `67.87 MiB` and cache stayed `0 B`
+
+That appears to be resident-only accounting noise rather than renewed active MLX pressure. This is an inference from the surrounding measurements:
+
+- `control-context.after-eval` and `control-context.after-clear-cache` stayed aligned with phase 2
+- `denoising.before-start` stayed aligned with phase 2
+- overall peak footprint dropped by about `25.38 GiB`
 
 ## What The Measured Probes Say
 
@@ -166,12 +185,21 @@ Measured high-resolution control probes, March 7, 2026:
   - `decode.after-eval`: resident `420.88 MiB`, active `127.48 MiB`, cache `39.00 GiB`, MLX peak `38.88 GiB`
   - `/usr/bin/time -l` maximum resident set size: `42,659,020,800` bytes
   - `/usr/bin/time -l` peak memory footprint: `86,580,223,280` bytes
+- Phase 3 after incremental hint accumulation:
+  - `prompt-embeddings.after-clear-cache`: resident `33.81 GiB`, active `29.18 GiB`, cache `0 B`
+  - `control-context.after-baseline-reduction`: resident `1012.41 MiB`, active `67.87 MiB`, cache `0 B`
+  - `control-context.after-eval`: resident `364.31 MiB`, active `71.36 MiB`, cache `28.08 GiB`
+  - `control-context.after-clear-cache`: resident `323.81 MiB`, active `71.36 MiB`, cache `0 B`
+  - `denoising.before-start`: resident `29.50 GiB`, active `29.19 GiB`, cache `65.30 MiB`
+  - `decode.after-eval`: resident `419.42 MiB`, active `127.48 MiB`, cache `39.00 GiB`, MLX peak `37.02 GiB`
+  - `/usr/bin/time -l` maximum resident set size: `42,656,612,352` bytes
+  - `/usr/bin/time -l` peak memory footprint: `59,328,863,512` bytes
 
 Three points matter here:
 
 1. The build-time baseline reduction is working. The repo now really does collapse resident memory before the control VAE encode.
 2. The post-build barrier removed the retained-cache overlap at the denoising start boundary, and phase 2 lowered the baseline even further by deferring VAE residency.
-3. The remaining high-resolution pressure is now more clearly concentrated in the encode workspace and the control denoiser itself.
+3. Phase 3 removed a large denoising-memory multiplier without changing the image, so the remaining high-resolution pressure is now more clearly concentrated in the encode/decode workspace and the core denoiser itself.
 
 The `/usr/bin/time -l` footprint is much higher than the MLX "peak" counter, which is expected. They are not the same metric.
 
@@ -188,9 +216,7 @@ That means the Swift port is not paying the control-context cost because it inve
 
 ## Ranked Remediation Order
 
-1. Remove stacked hint transport:
-   - keep current control state separate from accumulated hints
-   - stop rebuilding `MLX.stacked(...)` at every control block
-2. Only consider tiled/sliced encode if the remaining denoising or control-encode footprint is still unacceptable after the hint-transport change
+1. No additional code phase from this note is currently required.
+2. Only consider tiled/sliced encode if the remaining `~59.3 GiB` high-resolution peak footprint is still above the deployment target for a specific machine or workflow.
 
 The measured execution plan for these changes lives in `docs/dev_plans/control-context-memory-remediation.md`.

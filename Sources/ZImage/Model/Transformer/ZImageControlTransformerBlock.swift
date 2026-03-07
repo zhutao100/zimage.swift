@@ -2,6 +2,44 @@ import Foundation
 import MLX
 import MLXNN
 
+struct ZImageControlHintState {
+  let hints: [MLXArray]
+  let control: MLXArray
+
+  init(control: MLXArray, hints: [MLXArray] = []) {
+    self.hints = hints
+    self.control = control
+  }
+
+  init(stackedHints: MLXArray) {
+    let numHints = max(0, stackedHints.dim(0) - 1)
+    self.hints = (0..<numHints).map { stackedHints[$0] }
+    self.control = stackedHints[numHints]
+  }
+
+  func appending(hint: MLXArray, control nextControl: MLXArray) -> ZImageControlHintState {
+    var updatedHints = hints
+    updatedHints.append(hint)
+    return ZImageControlHintState(control: nextControl, hints: updatedHints)
+  }
+
+  func stacked() -> MLXArray {
+    MLX.stacked(hints + [control], axis: 0)
+  }
+
+  func scaledHints(layerPlaces: [Int], conditioningScale: Float) -> ZImageControlBlockSamples {
+    precondition(
+      layerPlaces.count == hints.count,
+      "Expected \(layerPlaces.count) control hints, got \(hints.count)")
+
+    var samples: ZImageControlBlockSamples = [:]
+    for (index, layerIdx) in layerPlaces.enumerated() {
+      samples[layerIdx] = hints[index] * conditioningScale
+    }
+    return samples
+  }
+}
+
 /// Control transformer block that generates hints for ControlNet
 /// This block processes control signals and outputs accumulated hints
 public final class ZImageControlTransformerBlock: Module {
@@ -102,34 +140,26 @@ public final class ZImageControlTransformerBlock: Module {
 
   /// Forward pass for control block
   /// - Parameters:
-  ///   - c: Control context (stacked hints if blockId > 0, or initial control if blockId == 0)
+  ///   - state: Current control state plus accumulated hints
   ///   - x: Main transformer hidden states (used only at blockId == 0)
   ///   - attnMask: Attention mask
   ///   - freqsCis: Rotary position embeddings
   ///   - adalnInput: Timestep embedding for adaptive layer norm
-  /// - Returns: Stacked hints array [num_hints, batch, seq, dim]
+  /// - Returns: Updated control state
   func callAsFunction(
-    _ c: MLXArray,
+    _ state: ZImageControlHintState,
     x: MLXArray,
     attnMask: MLXArray?,
     freqsCis: MLXArray?,
     adalnInput: MLXArray?
-  ) -> MLXArray {
-    var control: MLXArray
-    var allC: [MLXArray]
-
+  ) -> ZImageControlHintState {
+    var control = state.control
     if blockId == 0 {
       // First block: add projected control to main hidden states
       guard let beforeProj = beforeProj else {
         fatalError("beforeProj must be initialized for blockId == 0")
       }
-      control = beforeProj(c) + x
-      allC = []
-    } else {
-      // Subsequent blocks: unbind stacked hints, take last as control
-      let numHints = c.dim(0)
-      allC = (0..<(numHints - 1)).map { c[$0] }
-      control = c[numHints - 1]
+      control = beforeProj(control) + x
     }
 
     // Run through transformer block
@@ -138,10 +168,22 @@ public final class ZImageControlTransformerBlock: Module {
     // Project for skip connection
     let cSkip = afterProj(control)
 
-    // Accumulate hints
-    allC.append(cSkip)
-    allC.append(control)
+    return state.appending(hint: cSkip, control: control)
+  }
 
-    return MLX.stacked(allC, axis: 0)
+  func callAsFunction(
+    _ c: MLXArray,
+    x: MLXArray,
+    attnMask: MLXArray?,
+    freqsCis: MLXArray?,
+    adalnInput: MLXArray?
+  ) -> MLXArray {
+    let state =
+      if blockId == 0 {
+        ZImageControlHintState(control: c)
+      } else {
+        ZImageControlHintState(stackedHints: c)
+      }
+    return callAsFunction(state, x: x, attnMask: attnMask, freqsCis: freqsCis, adalnInput: adalnInput).stacked()
   }
 }
