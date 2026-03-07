@@ -1,6 +1,6 @@
 # Memory Footprint Analysis (MLX / Apple Silicon)
 
-Updated for `main` at commit `0305fa83` (post-rebase onto upstream `origin-main@970f83e…`).
+Updated for `main` at commit ` 0d5c7ae8` (post-rebase onto upstream `origin-main@970f83e…`).
 
 This document explains why Z-Image.swift can show higher peak resident memory (RSS) in Activity Monitor than a PyTorch/Diffusers/MPS baseline, and where that memory comes from in the current codebase.
 
@@ -9,7 +9,7 @@ This document explains why Z-Image.swift can show higher peak resident memory (R
 - **Kernel strategy:** This project runs on `mlx-swift` (`MLX`/`MLXNN`), not PyTorch MPS. For stride=1 3×3 convs, MLX can lower to GEMM via an **im2col**-style workspace, which becomes very large at full resolution.
 - **Unified memory reporting:** Activity Monitor includes unified memory + allocator pools + temporary workspaces + CPU-side copies. Diffusers “memory” reports often exclude allocator caches and some workspaces.
 
-## Pipeline Shape Today (As of `370f2d65`)
+## Pipeline Shape Today
 
 The standard pipeline loads components through `loadModel(...)`, but **intentionally releases large modules across phases during a generation** to reduce peak RSS:
 

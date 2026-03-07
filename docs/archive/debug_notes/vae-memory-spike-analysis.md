@@ -1,6 +1,6 @@
 # VAE Memory Spike Analysis
 
-Updated for `main` at commit `0305fa83` (post-rebase onto upstream `origin-main@970f83e…`).
+Updated for `main` at commit `0d5c7ae8` (post-rebase onto upstream `origin-main@970f83e…`).
 
 This document focuses specifically on VAE decode memory: why it can spike on Apple Silicon with MLX, what the current code already does to mitigate it, and what remains if you still hit OOM at very large resolutions.
 

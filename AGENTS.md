@@ -5,12 +5,10 @@ This file is the operational guide for agents working in this repo. Prefer concr
 ## Read First (Pick The Minimal Set)
 
 - **Any task**: `README.md`, then `docs/README.md`
-- **Architecture / code navigation**: `docs/ARCHITECTURE.md`, then `CLAUDE.md`
+- **Architecture / code navigation**: `docs/ARCHITECTURE.md`.
 - **CLI work** (flags/subcommands/help): `docs/CLI.md` and `Sources/ZImageCLI/main.swift`
 - **Model loading / weights / safetensors**: `docs/MODELS_AND_WEIGHTS.md` and `Sources/ZImage/Weights/*`
 - **Upstream model structure**: `docs/z-image-turbo.md`, `docs/z-image.md`
-
-If you’re in a hurry: `CLAUDE.md` is a concise “project overview + build/test commands” summary.
 
 ## Repo Map (Where Things Live)
 
