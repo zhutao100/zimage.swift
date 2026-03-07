@@ -794,7 +794,6 @@ public class ZImageControlPipeline {
     } else if controlnet != nil || loadedControlnetWeightsId != nil {
       unloadControlnet()
     }
-    try await applyLoRAIfNeeded(request.lora)
     guard let snapshot,
       let modelConfigs,
       let tokenizer,
@@ -907,13 +906,21 @@ public class ZImageControlPipeline {
       let controlCG: CGImage? = request.controlImageCG ?? (request.controlImage.flatMap { loadCGImage(from: $0) })
       let inpaintCG: CGImage? = request.inpaintImageCG ?? (request.inpaintImage.flatMap { loadCGImage(from: $0) })
       let maskCG: CGImage? = request.maskImageCG ?? (request.maskImage.flatMap { loadCGImage(from: $0) })
-      if controlCG != nil || inpaintCG != nil || maskCG != nil {
+      let hasControlInputs = controlCG != nil || inpaintCG != nil || maskCG != nil
+      if hasControlInputs {
         logger.info(
           "Building control context (control=\(controlCG != nil), inpaint=\(inpaintCG != nil), mask=\(maskCG != nil))..."
         )
         if disableControlVAEMidBlockAttention, controlCG != nil {
           logger.warning("Diagnostic mode: disabling VAE mid-block attention for control-image encoding")
         }
+        let needsBaselineReduction = transformer != nil || controlnet != nil || hasLoRALoaded
+        if needsBaselineReduction {
+          unloadTransformer()
+        } else {
+          Memory.clearCache()
+        }
+        logControlMemory("control-context.after-baseline-reduction", enabled: logPhaseMemory)
         logControlMemory("control-context.before-build", enabled: logPhaseMemory)
         let result = try buildControlContext(
           controlImage: controlCG,
@@ -993,6 +1000,9 @@ public class ZImageControlPipeline {
       if let loraConfig = request.lora {
         try await applyLoRAIfNeeded(loraConfig)
       }
+    }
+    if transformer != nil {
+      try await applyLoRAIfNeeded(request.lora)
     }
     logControlMemory("denoising.before-start", enabled: logPhaseMemory)
     logger.info("Running \(request.steps) denoising steps with control_context_scale=\(request.controlContextScale)...")
