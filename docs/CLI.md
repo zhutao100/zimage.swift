@@ -93,6 +93,7 @@ Run `./ZImageCLI control --help` for the complete option list and control image 
 Useful control-only diagnostics:
 
 - `--log-control-memory` emits process-resident and MLX memory markers around prompt encoding, control-context construction, denoising start, and final decode.
+- `--debug-disable-control-vae-attention` is a diagnostic-only switch for measuring how much the control-image VAE mid-block attention contributes to the peak. It is not intended as a quality-preserving runtime mode.
 
 ## Quantization
 
