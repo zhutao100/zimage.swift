@@ -48,6 +48,61 @@ public struct VAEConfig {
   }
 }
 
+enum VAEAttention {
+  static let defaultQueryChunkSize = 1024
+
+  static func scaledDotProductAttention(
+    queries: MLXArray,
+    keys: MLXArray,
+    values: MLXArray,
+    scale: Float,
+    queryChunkSize: Int? = defaultQueryChunkSize
+  ) -> MLXArray {
+    guard let queryChunkSize, queryChunkSize > 0 else {
+      return MLXFast.scaledDotProductAttention(
+        queries: queries,
+        keys: keys,
+        values: values,
+        scale: scale,
+        mask: nil
+      )
+    }
+
+    let queryCount = queries.shape[2]
+    guard queryCount > queryChunkSize else {
+      return MLXFast.scaledDotProductAttention(
+        queries: queries,
+        keys: keys,
+        values: values,
+        scale: scale,
+        mask: nil
+      )
+    }
+
+    let chunkCount = (queryCount + queryChunkSize - 1) / queryChunkSize
+    var chunks: [MLXArray] = []
+    chunks.reserveCapacity(chunkCount)
+
+    var start = 0
+    while start < queryCount {
+      let end = min(queryCount, start + queryChunkSize)
+      let queryChunk = queries[0..., 0..., start..<end, 0...]
+      let chunk = MLXFast.scaledDotProductAttention(
+        queries: queryChunk,
+        keys: keys,
+        values: values,
+        scale: scale,
+        mask: nil
+      )
+      MLX.eval(chunk)
+      chunks.append(chunk)
+      start = end
+    }
+
+    return MLX.concatenated(chunks, axis: 2)
+  }
+}
+
 private final class VAESelfAttention: Module {
   @ModuleInfo(key: "group_norm") var groupNorm: GroupNorm
   @ModuleInfo(key: "to_q") var toQ: Linear
@@ -73,15 +128,15 @@ private final class VAESelfAttention: Module {
     let queries = toQ(hidden).reshaped(b, h * w, c).expandedDimensions(axis: 1)
     let keys = toK(hidden).reshaped(b, h * w, c).expandedDimensions(axis: 1)
     let values = toV(hidden).reshaped(b, h * w, c).expandedDimensions(axis: 1)
+    MLX.eval(queries, keys, values)
 
     let scale = 1 / sqrt(Float(c))
 
-    let attn = MLXFast.scaledDotProductAttention(
+    let attn = VAEAttention.scaledDotProductAttention(
       queries: queries,
       keys: keys,
       values: values,
-      scale: scale,
-      mask: nil
+      scale: scale
     )
 
     hidden = attn.squeezed(axis: 1).reshaped(b, h, w, c)
