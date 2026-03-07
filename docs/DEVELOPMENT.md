@@ -56,10 +56,11 @@ xcodebuild build -scheme ZImageCLI -destination 'platform=macOS' -derivedDataPat
   --output /tmp/zimage-control-memory-check.png
 ```
 
-Watch `control-context.after-baseline-reduction`, `control-context.after-eval`, and `decode.after-eval`. The retained runtime policy is:
+Watch `control-context.after-baseline-reduction`, `control-context.after-eval`, `control-context.after-clear-cache`, and `decode.after-eval`. The retained runtime policy is:
 
 - keep `--log-control-memory` as the supported probe
 - unload transformer, ControlNet, and active LoRA state before `buildControlContext(...)`
+- materialize the stored control-context tensor and clear cache before transformer/controlnet reload
 - keep query-chunked VAE self-attention on by default
 - skip tiled encode and VAE lifecycle splitting unless new measurements show a pathological regression again
 

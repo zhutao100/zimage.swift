@@ -92,7 +92,7 @@ Run `./ZImageCLI control --help` for the complete option list and control image 
 
 Useful control-only diagnostics:
 
-- `--log-control-memory` emits process-resident and MLX memory markers around prompt encoding, control-context construction, denoising start, and final decode.
+- `--log-control-memory` emits process-resident and MLX memory markers around prompt encoding, control-context construction, the post-build cache-release barrier, denoising start, and final decode.
 
 The control pipeline now unloads the transformer, ControlNet, and active LoRA state before `buildControlContext(...)`, then reloads them before denoising. The temporary attention-disable CLI switch used during the remediation investigation was removed after it failed to lower the measured peak materially.
 

@@ -113,7 +113,8 @@ Key code:
 1. Prompt embeddings are computed and cached.
 2. The transformer, ControlNet, and active LoRA state are unloaded before `buildControlContext(...)`.
 3. Control and inpaint inputs are VAE-encoded while the baseline residency is low.
-4. The transformer, ControlNet, and LoRA state are reloaded before denoising starts.
+4. The stored control-context tensor is materialized and MLX cache is cleared.
+5. The transformer, ControlNet, and LoRA state are reloaded before denoising starts.
 
 The VAE mid-block self-attention in `Sources/ZImage/Model/VAE/AutoencoderKL.swift` now chunks the query dimension internally to reduce large-image MLX cache pressure without changing weights. The supported runtime probe for this path is `ZImageCLI control --log-control-memory`.
 

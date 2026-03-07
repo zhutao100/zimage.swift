@@ -84,7 +84,7 @@ Acceptance bar:
 
 ## Phase 1: Post-Build Materialization Barrier
 
-Status: pending
+Status: completed on March 7, 2026
 
 Objective:
 
@@ -180,3 +180,25 @@ Acceptance criteria:
 - Phase 0 fixed-seed quality probe:
   - output dimensions: `512x512`
   - output SHA-256: `2afd1fa9ba4398ad2b8b53510f44d602d5d7d5cc2631cee99d35c6d0752f8f70`
+- Phase 1: completed on March 7, 2026.
+  - Scope landed:
+    - materialize the stored control-context tensor before reloading transformer/controlnet
+    - clear MLX cache immediately after the typed control context is materialized
+    - add `control-context.after-clear-cache` telemetry
+  - Phase 1 high-resolution memory probe:
+    - `control-context.after-baseline-reduction`: resident `370.17 MiB`, active `162.37 MiB`, cache `0 B`
+    - `control-context.after-eval`: resident `463.17 MiB`, active `165.86 MiB`, cache `28.08 GiB`
+    - `control-context.after-clear-cache`: resident `422.67 MiB`, active `165.86 MiB`, cache `0 B`
+    - `denoising.before-start`: resident `29.60 GiB`, active `29.34 GiB`, cache `5.71 KiB`
+    - `decode.after-eval`: resident `424.09 MiB`, active `192.86 MiB`, cache `38.95 GiB`, MLX peak `39.03 GiB`
+    - `/usr/bin/time -l` maximum resident set size: `42,830,249,984` bytes
+    - `/usr/bin/time -l` peak memory footprint: `86,684,278,016` bytes
+  - Phase 1 fixed-seed quality probe:
+    - output SHA-256: `2afd1fa9ba4398ad2b8b53510f44d602d5d7d5cc2631cee99d35c6d0752f8f70`
+    - phase 1 vs phase 0 MAE: `0.0000`
+    - phase 1 vs phase 0 max abs pixel delta: `0`
+    - phase 1 vs phase 0 PSNR: `inf`
+  - Assessment:
+    - the retained cache at `denoising.before-start` collapsed from about `28 GiB` to effectively zero
+    - peak memory footprint improved by `24.11 GiB`, while maximum RSS stayed effectively flat
+    - the fixed-seed control output remained bit-identical to phase 0

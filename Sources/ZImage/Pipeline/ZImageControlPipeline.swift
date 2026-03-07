@@ -922,7 +922,11 @@ public class ZImageControlPipeline {
         MLX.eval(result)
         logControlMemory("control-context.after-eval", enabled: logPhaseMemory)
         logger.info("Control context built, shape: \(result.shape)")
-        controlContext = result.asType(vae.dtype)
+        let materializedControlContext = result.asType(vae.dtype)
+        MLX.eval(materializedControlContext)
+        controlContext = materializedControlContext
+        Memory.clearCache()
+        logControlMemory("control-context.after-clear-cache", enabled: logPhaseMemory)
       }
     #else
       if let controlImageURL = request.controlImage {
