@@ -122,7 +122,7 @@ Acceptance criteria:
 
 ## Phase 3: Bool Prompt-Attention Masking
 
-Status: pending
+Status: completed on March 7, 2026
 
 Objective:
 
@@ -228,4 +228,29 @@ This section is updated as phases land.
   - Assessment:
     - parity improved in both fixed probes relative to phase 1
     - peak memory footprint improved again, while peak RSS stayed effectively flat
-- Phase 3: pending
+- Phase 3: completed on March 7, 2026.
+  - Scope landed:
+    - prompt-encoding attention now uses a combined causal-plus-padding boolean keep mask in `TextEncoder.swift`
+    - generation-time KV-cache masking remained unchanged
+    - focused tests cover both the no-padding causal fallback and the combined boolean mask layout
+  - Phase 3 base metrics:
+    - Swift peak RSS: `38.16 GiB` (`38164676608` bytes)
+    - Swift peak memory footprint: `39.08 GiB` (`39078529816` bytes)
+    - Swift vs Diffusers MAE: `28.6765`
+    - Swift vs Diffusers max abs pixel delta: `254`
+    - Swift vs Diffusers PSNR: `14.6461 dB`
+    - Swift phase 3 vs phase 2 MAE: `0.0000`
+    - Swift phase 3 vs phase 2 max abs pixel delta: `0`
+    - Swift phase 3 vs phase 2 PSNR: `inf`
+  - Phase 3 control metrics:
+    - Swift peak RSS: `42.82 GiB` (`42824761344` bytes)
+    - Swift peak memory footprint: `51.39 GiB` (`51393944928` bytes)
+    - Swift vs Diffusers MAE: `33.3201`
+    - Swift vs Diffusers max abs pixel delta: `236`
+    - Swift vs Diffusers PSNR: `15.2483 dB`
+    - Swift phase 3 vs phase 2 MAE: `0.0000`
+    - Swift phase 3 vs phase 2 max abs pixel delta: `0`
+    - Swift phase 3 vs phase 2 PSNR: `inf`
+  - Assessment:
+    - prompt-path behavior remained bit-identical to phase 2 on both fixed probes
+    - peak RSS stayed effectively flat, and the small peak-footprint movement fell within measurement noise for these runs

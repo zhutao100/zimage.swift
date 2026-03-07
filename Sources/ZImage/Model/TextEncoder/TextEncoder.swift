@@ -418,29 +418,18 @@ public final class QwenEncoder: Module {
     return (h, allHiddenStates)
   }
 
-  private func createAttentionMask(h: MLXArray, attentionMask: MLXArray?) -> MLXFast.ScaledDotProductAttentionMaskMode {
+  func createAttentionMask(h: MLXArray, attentionMask: MLXArray?) -> MLXFast.ScaledDotProductAttentionMaskMode {
     let L = h.dim(1)
 
     let causalMask = MLXFast.ScaledDotProductAttentionMaskMode.causal
 
     if let attentionMask = attentionMask {
-      let paddingMask = attentionMask.asType(h.dtype)
-      let zeros = MLX.zeros(paddingMask.shape, dtype: h.dtype)
-      let negInf = MLXArray(-Float.infinity).asType(h.dtype)
-      let keepMask = paddingMask .== MLXArray(1).asType(h.dtype)
-      var additivePaddingMask = MLX.where(keepMask, zeros, zeros + negInf)
-
-      additivePaddingMask = additivePaddingMask.reshaped(additivePaddingMask.dim(0), 1, 1, L)
-
+      let paddingKeepMask = attentionMask.asType(.bool).reshaped(attentionMask.dim(0), 1, 1, L)
       let idx = MLXArray(0..<L)
       let rows = idx.reshaped(L, 1)
       let cols = idx.reshaped(1, L)
-      let causalBool = cols .> rows
-      var causalAdditive = MLX.zeros([L, L], dtype: h.dtype)
-      causalAdditive = MLX.where(causalBool, causalAdditive + negInf, causalAdditive)
-      causalAdditive = causalAdditive.reshaped(1, 1, L, L)
-
-      let combinedMask = causalAdditive + additivePaddingMask
+      let causalKeepMask = (cols .<= rows).reshaped(1, 1, L, L)
+      let combinedMask = causalKeepMask .&& paddingKeepMask
 
       return .array(combinedMask)
     }
