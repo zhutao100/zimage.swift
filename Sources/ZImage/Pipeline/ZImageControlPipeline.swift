@@ -846,50 +846,53 @@ public class ZImageControlPipeline {
           stepIndex: 0, totalSteps: 0, fractionCompleted: 0
         ))
       logger.info("Loading text encoder...")
-      let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
-      let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
-      let textEncoderWeights = try weightsMapper.loadTextEncoder()
-      ZImageWeightsMapping.applyTextEncoder(
-        weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
       var finalPrompt = request.prompt
       var enhancedPromptForCache: String? = nil
-      if request.enhancePrompt {
-        request.progressCallback?(
-          ControlProgress(
-            stage: "Enhancing prompt",
-            stepIndex: 0, totalSteps: 0, fractionCompleted: 0
-          ))
-        logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
-        let enhanceConfig = PromptEnhanceConfig(maxNewTokens: request.enhanceMaxTokens)
-        let enhanced = try textEncoder.enhancePrompt(request.prompt, tokenizer: tokenizer, config: enhanceConfig)
-        if enhanced.isEmpty {
-          logger.warning("Prompt enhancement incomplete (need more tokens), using original prompt")
-        } else {
-          logger.info("Enhanced prompt: \(enhanced)")
-          finalPrompt = enhanced
-          enhancedPromptForCache = enhanced
+      do {
+        let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
+        let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
+        let textEncoderWeights = try weightsMapper.loadTextEncoder()
+        ZImageWeightsMapping.applyTextEncoder(
+          weights: textEncoderWeights, to: textEncoder, manifest: quantManifest, logger: logger)
+        if request.enhancePrompt {
           request.progressCallback?(
             ControlProgress(
-              stage: "Prompt enhanced",
-              stepIndex: 0, totalSteps: 0, fractionCompleted: 0,
-              enhancedPrompt: enhanced
+              stage: "Enhancing prompt",
+              stepIndex: 0, totalSteps: 0, fractionCompleted: 0
             ))
+          logger.info("Enhancing prompt using LLM (max tokens: \(request.enhanceMaxTokens))...")
+          let enhanceConfig = PromptEnhanceConfig(maxNewTokens: request.enhanceMaxTokens)
+          let enhanced = try textEncoder.enhancePrompt(request.prompt, tokenizer: tokenizer, config: enhanceConfig)
+          if enhanced.isEmpty {
+            logger.warning("Prompt enhancement incomplete (need more tokens), using original prompt")
+          } else {
+            logger.info("Enhanced prompt: \(enhanced)")
+            finalPrompt = enhanced
+            enhancedPromptForCache = enhanced
+            request.progressCallback?(
+              ControlProgress(
+                stage: "Prompt enhanced",
+                stepIndex: 0, totalSteps: 0, fractionCompleted: 0,
+                enhancedPrompt: enhanced
+              ))
+          }
+          Memory.clearCache()
         }
-        Memory.clearCache()
+        let (pe, _) = try encodePrompt(
+          finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
+        promptEmbeds = pe
+        if doCFG {
+          let (ne, _) = try encodePrompt(
+            request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder,
+            maxLength: request.maxSequenceLength)
+          negativeEmbeds = ne
+          MLX.eval(promptEmbeds, ne)
+        } else {
+          negativeEmbeds = nil
+          MLX.eval(promptEmbeds)
+        }
       }
-      let (pe, _) = try encodePrompt(
-        finalPrompt, tokenizer: tokenizer, textEncoder: textEncoder, maxLength: request.maxSequenceLength)
-      promptEmbeds = pe
-      if doCFG {
-        let (ne, _) = try encodePrompt(
-          request.negativePrompt ?? "", tokenizer: tokenizer, textEncoder: textEncoder,
-          maxLength: request.maxSequenceLength)
-        negativeEmbeds = ne
-        MLX.eval(promptEmbeds, ne)
-      } else {
-        negativeEmbeds = nil
-        MLX.eval(promptEmbeds)
-      }
+      Memory.clearCache()
       cachedPromptEmbedding = CachedPromptEmbedding(
         prompt: request.prompt,
         negativePrompt: request.negativePrompt,
