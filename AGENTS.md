@@ -68,6 +68,8 @@ Some core implementations were written by referencing Hugging Face Diffusers:
 
 Use it when validating weight naming/mapping, scheduler behavior, or architecture parity.
 
+When inspecting Python reference code, use `PYENV_VERSION=venv313 pyenv exec ...`
+
 ## Useful Tools / Resources
 
 - Inspect `.safetensors` structure:
