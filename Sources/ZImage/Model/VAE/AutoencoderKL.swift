@@ -433,6 +433,10 @@ public final class AutoencoderKL: Module {
     super.init()
   }
 
+  public var dtype: DType {
+    encoder.convIn.weight.dtype
+  }
+
   public func decode(_ latents: MLXArray, return_dict: Bool = false) -> (MLXArray, Any) {
     var x = latents
     x = x.transposed(0, 2, 3, 1)

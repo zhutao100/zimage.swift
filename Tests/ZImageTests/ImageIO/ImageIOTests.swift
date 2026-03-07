@@ -106,6 +106,15 @@ import XCTest
       XCTAssertEqual(result[2], 1.0, accuracy: 1e-5)
     }
 
+    func testNormalizeForEncoderPreservesInputDtype() {
+      let values: [Float] = [0.0, 0.5, 1.0, 0.25, 0.75, 0.0]
+      let array = MLXArray(values, [3, 1, 2]).asType(.bfloat16)
+
+      let normalized = QwenImageIO.normalizeForEncoder(array)
+
+      XCTAssertEqual(normalized.dtype, .bfloat16)
+    }
+
     func testDenormalizeFromDecoder() {
       // Create array with values in [-1, 1]
       let values: [Float] = [-1.0, 0.0, 1.0, -0.5, 0.5, 0.0]
@@ -121,6 +130,15 @@ import XCTest
       XCTAssertEqual(result[0], 0.0, accuracy: 1e-5)
       XCTAssertEqual(result[1], 0.5, accuracy: 1e-5)
       XCTAssertEqual(result[2], 1.0, accuracy: 1e-5)
+    }
+
+    func testDenormalizeFromDecoderPreservesInputDtype() {
+      let values: [Float] = [-1.0, 0.0, 1.0, -0.5, 0.5, 0.0]
+      let array = MLXArray(values, [3, 1, 2]).asType(.bfloat16)
+
+      let denormalized = QwenImageIO.denormalizeFromDecoder(array)
+
+      XCTAssertEqual(denormalized.dtype, .bfloat16)
     }
 
     func testNormalizeDenormalizeRoundTrip() {

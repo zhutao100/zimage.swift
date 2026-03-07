@@ -3,6 +3,7 @@ import MLX
 import MLXNN
 
 public protocol VAEImageDecoding {
+  var dtype: DType { get }
   func decode(_ latents: MLXArray, return_dict: Bool) -> (MLXArray, Any)
 }
 
@@ -18,6 +19,10 @@ public final class AutoencoderDecoderOnly: Module, VAEImageDecoding {
     self.configuration = configuration
     self._decoder.wrappedValue = VAEDecoder(config: configuration)
     super.init()
+  }
+
+  public var dtype: DType {
+    decoder.convIn.weight.dtype
   }
 
   public func decode(_ latents: MLXArray, return_dict: Bool = false) -> (MLXArray, Any) {

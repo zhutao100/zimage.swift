@@ -174,11 +174,15 @@ import MLX
     }
 
     public static func normalizeForEncoder(_ image: MLXArray) -> MLXArray {
-      image * 2 - 1
+      let two = MLXArray(Float(2.0)).asType(image.dtype)
+      let one = MLXArray(Float(1.0)).asType(image.dtype)
+      return (image * two) - one
     }
 
     static func denormalizeFromDecoder(_ image: MLXArray) -> MLXArray {
-      (image + 1) / 2
+      let two = MLXArray(Float(2.0)).asType(image.dtype)
+      let one = MLXArray(Float(1.0)).asType(image.dtype)
+      return (image + one) / two
     }
 
     static func saveImage(array: MLXArray, to url: URL) throws {

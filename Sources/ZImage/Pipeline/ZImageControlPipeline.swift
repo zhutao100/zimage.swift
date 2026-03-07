@@ -404,18 +404,21 @@ public class ZImageControlPipeline {
       pixelH: Int,
       pixelW: Int
     ) throws -> MLXArray {
+      let vaeDType = vae.dtype
       let imageArray = try QwenImageIO.resizedPixelArray(
         from: cgImage,
         width: pixelW,
         height: pixelH,
         addBatchDimension: true,
-        dtype: .float32
+        dtype: vaeDType
       )
       let normalized = QwenImageIO.normalizeForEncoder(imageArray)
       let encodedLatents = vae.encode(normalized)
       let latentChannels = vaeConfig.latentChannels
       let latents = encodedLatents[0..., 0..<latentChannels, 0..., 0...]
-      return (latents - vaeConfig.shiftFactor) * vaeConfig.scalingFactor
+      let shiftFactor = MLXArray(vaeConfig.shiftFactor).asType(latents.dtype)
+      let scaleFactor = MLXArray(vaeConfig.scalingFactor).asType(latents.dtype)
+      return (latents - shiftFactor) * scaleFactor
     }
 
     private func convertToRGBA(_ image: CGImage) -> CGImage? {
@@ -477,6 +480,10 @@ public class ZImageControlPipeline {
       let latentW = max(1, targetWidth / vaeDivisor)
       let pixelH = latentH * vaeDivisor
       let pixelW = latentW * vaeDivisor
+      let vaeDType = vae.dtype
+      let zero = MLXArray(Float(0.0)).asType(vaeDType)
+      let one = MLXArray(Float(1.0)).asType(vaeDType)
+      let half = MLXArray(Float(0.5)).asType(vaeDType)
       let controlLatents: MLXArray =
         if let control = controlImage {
           try encodeImageToLatents(
@@ -487,7 +494,7 @@ public class ZImageControlPipeline {
             pixelW: pixelW
           )
         } else {
-          MLXArray.zeros([1, 16, latentH, latentW])
+          MLX.zeros([1, vaeConfig.latentChannels, latentH, latentW], dtype: vaeDType)
         }
       let pixelMask: MLXArray?
       if let mask = maskImage {
@@ -499,11 +506,11 @@ public class ZImageControlPipeline {
           width: pixelW,
           height: pixelH,
           addBatchDimension: true,
-          dtype: .float32,
+          dtype: vaeDType,
           interpolation: .high
         )
         let grayscaleMask = MLX.mean(maskPixels, axis: 1, keepDims: true)
-        pixelMask = MLX.where(grayscaleMask .>= 0.5, MLXArray(Float(1.0)), MLXArray(Float(0.0)))
+        pixelMask = MLX.where(grayscaleMask .>= half, one, zero)
       } else {
         pixelMask = nil
       }
@@ -517,34 +524,34 @@ public class ZImageControlPipeline {
           width: pixelW,
           height: pixelH,
           addBatchDimension: true,
-          dtype: .float32
+          dtype: vaeDType
         )
-        let normalized = (inpaintPixels * 2.0) - 1.0
+        let normalized = QwenImageIO.normalizeForEncoder(inpaintPixels)
         var maskedNormalized = normalized
         if let mask = pixelMask {
-          let keepMask = MLX.less(mask, MLXArray(Float(0.5)))
+          let keepMask = MLX.less(mask, half)
           maskedNormalized = normalized * keepMask.asType(normalized.dtype)
         }
         MLX.eval(maskedNormalized)
-        let shiftFactor = MLXArray(vaeConfig.shiftFactor)
-        let scaleFactor = MLXArray(vaeConfig.scalingFactor)
         let latentChannels = vaeConfig.latentChannels
         let encoded = vae.encode(maskedNormalized)
         let latents = encoded[0..., 0..<latentChannels, 0..., 0...]
+        let shiftFactor = MLXArray(vaeConfig.shiftFactor).asType(latents.dtype)
+        let scaleFactor = MLXArray(vaeConfig.scalingFactor).asType(latents.dtype)
         inpaintLatents = (latents - shiftFactor) * scaleFactor
       } else {
-        inpaintLatents = MLXArray.zeros([1, 16, latentH, latentW])
+        inpaintLatents = MLX.zeros([1, vaeConfig.latentChannels, latentH, latentW], dtype: vaeDType)
       }
       let maskCondition: MLXArray
       if let mask = pixelMask {
-        let invertedMask = 1.0 - mask
+        let invertedMask = one - mask
         var nhwc = invertedMask.transposed(0, 2, 3, 1)
         let hScale = Float(latentH) / Float(pixelH)
         let wScale = Float(latentW) / Float(pixelW)
         nhwc = MLXNN.Upsample(scaleFactor: .array([hScale, wScale]), mode: .nearest)(nhwc)
         maskCondition = nhwc.transposed(0, 3, 1, 2)
       } else {
-        maskCondition = MLXArray.zeros([1, 1, latentH, latentW])
+        maskCondition = MLX.zeros([1, 1, latentH, latentW], dtype: vaeDType)
       }
       let combined = MLX.concatenated([controlLatents, maskCondition, inpaintLatents], axis: 1)
       return MLX.expandedDimensions(combined, axis: 2)
@@ -925,7 +932,7 @@ public class ZImageControlPipeline {
         )
         MLX.eval(result)
         logger.info("Control context built, shape: \(result.shape)")
-        controlContext = result.asType(.bfloat16)
+        controlContext = result.asType(vae.dtype)
       }
     #else
       if let controlImageURL = request.controlImage {

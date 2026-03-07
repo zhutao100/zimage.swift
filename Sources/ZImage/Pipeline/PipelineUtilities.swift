@@ -38,10 +38,10 @@ public enum PipelineUtilities {
     width: Int
   ) -> MLXArray {
     let input: MLXArray =
-      if latents.dtype == .bfloat16 {
+      if latents.dtype == vae.dtype {
         latents
       } else {
-        latents.asType(.bfloat16)
+        latents.asType(vae.dtype)
       }
 
     let (decoded, _) = vae.decode(input, return_dict: false)
