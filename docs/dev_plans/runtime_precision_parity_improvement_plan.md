@@ -97,7 +97,7 @@ Acceptance criteria:
 
 ## Phase 2: Timestep-MLP Ingress Dtype Normalization
 
-Status: pending
+Status: completed on March 7, 2026
 
 Objective:
 
@@ -203,5 +203,29 @@ This section is updated as phases land.
   - Assessment:
     - parity remained effectively flat on the fixed probes
     - peak memory footprint improved modestly in both probes, while peak RSS stayed effectively flat
-- Phase 2: pending
+- Phase 2: completed on March 7, 2026.
+  - Scope landed:
+    - explicit runtime-dtype cast for timestep frequency features at the `mlp.0` ingress in `ZImageTimestepEmbedder`
+    - focused tests covering both the cast helper and the end-to-end output dtype under forced `bfloat16` weights
+  - Phase 2 base metrics:
+    - Swift peak RSS: `38.16 GiB` (`38164889600` bytes)
+    - Swift peak memory footprint: `38.94 GiB` (`38935251640` bytes)
+    - Swift vs Diffusers MAE: `28.6765`
+    - Swift vs Diffusers max abs pixel delta: `254`
+    - Swift vs Diffusers PSNR: `14.6461 dB`
+    - Swift phase 2 vs phase 1 MAE: `1.0000`
+    - Swift phase 2 vs phase 1 max abs pixel delta: `164`
+    - Swift phase 2 vs phase 1 PSNR: `39.2637 dB`
+  - Phase 2 control metrics:
+    - Swift peak RSS: `42.82 GiB` (`42824695808` bytes)
+    - Swift peak memory footprint: `51.39 GiB` (`51390979472` bytes)
+    - Swift vs Diffusers MAE: `33.3201`
+    - Swift vs Diffusers max abs pixel delta: `236`
+    - Swift vs Diffusers PSNR: `15.2483 dB`
+    - Swift phase 2 vs phase 1 MAE: `1.0363`
+    - Swift phase 2 vs phase 1 max abs pixel delta: `43`
+    - Swift phase 2 vs phase 1 PSNR: `43.6782 dB`
+  - Assessment:
+    - parity improved in both fixed probes relative to phase 1
+    - peak memory footprint improved again, while peak RSS stayed effectively flat
 - Phase 3: pending

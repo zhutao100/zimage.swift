@@ -27,4 +27,24 @@ final class PipelinePrecisionTests: XCTestCase {
 
     XCTAssertEqual(typed.dtype, .float32)
   }
+
+  func testCastFrequencyEmbeddingToMLPInputDTypeIfNeededCastsToFirstLayerWeightDType() {
+    let embedder = ZImageTimestepEmbedder(outSize: 16, midSize: 16)
+    embedder.apply { $0.asType(.bfloat16) }
+    let input = MLXArray([Float](repeating: 1, count: 256), [1, 256])
+
+    let typed = embedder.castFrequencyEmbeddingToMLPInputDTypeIfNeeded(input)
+
+    XCTAssertEqual(typed.dtype, .bfloat16)
+  }
+
+  func testTimestepEmbedderUsesFirstLayerWeightDTypeAtMLPIngress() {
+    let embedder = ZImageTimestepEmbedder(outSize: 16, midSize: 16)
+    embedder.apply { $0.asType(.bfloat16) }
+    let timesteps = MLXArray([Float(1)], [1])
+
+    let output = embedder(timesteps)
+
+    XCTAssertEqual(output.dtype, .bfloat16)
+  }
 }

@@ -44,8 +44,23 @@ final class ZImageTimestepEmbedder: Module {
     return emb
   }
 
+  func castFrequencyEmbeddingToMLPInputDTypeIfNeeded(_ input: MLXArray) -> MLXArray {
+    let dtype = mlp.0.weight.dtype
+    switch dtype {
+    case .float16, .bfloat16, .float32, .float64:
+      guard input.dtype != dtype else {
+        return input
+      }
+      return input.asType(dtype)
+    default:
+      return input
+    }
+  }
+
   func callAsFunction(_ timesteps: MLXArray) -> MLXArray {
-    let tFreq = timestepEmbedding(timesteps, dim: frequencyEmbeddingSize)
+    let tFreq = castFrequencyEmbeddingToMLPInputDTypeIfNeeded(
+      timestepEmbedding(timesteps, dim: frequencyEmbeddingSize)
+    )
     var out = mlp.0(tFreq)
     out = mlp.1(out)
     out = mlp.2(out)
