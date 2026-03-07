@@ -26,6 +26,7 @@ If you’re new here, start with the root `README.md` for a runnable quickstart.
 ## Current context / investigations
 
 - [`docs/context/zimage_runtime_precision_parity_report.md`](context/zimage_runtime_precision_parity_report.md) — confirmed parity, confirmed mismatches, and runtime hypotheses for Swift vs Diffusers precision handling.
+- [`docs/dev_plans/runtime_precision_parity_improvement_plan.md`](dev_plans/runtime_precision_parity_improvement_plan.md) — measured execution plan for the first runtime precision parity fixes.
 - [`docs/context/mlx_pytorch_bf16_inference_dtype_deep_dive.md`](context/mlx_pytorch_bf16_inference_dtype_deep_dive.md) — backend-level BF16 behavior notes for MLX and PyTorch/MPS.
 - [`docs/context/precision_formats_on_apple_silicon.md`](context/precision_formats_on_apple_silicon.md) — broader Apple Silicon precision-format background.
 

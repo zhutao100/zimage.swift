@@ -2,6 +2,15 @@
 
 This report summarizes the current precision-parity status of the Swift + MLX implementation against the directly relevant Diffusers Z-Image pipelines.
 
+Validation status: hardened on March 7, 2026 against the current `zimage.swift` tree, the local Diffusers checkout at commit `e1b5db52bda85d47a4f8f75954f77e672a8f7f1c`, and the checked-out `mlx-swift` 0.30.6 sources under `.build/checkouts/mlx-swift/`.
+
+Hardening notes:
+
+- Statements in the **confirmed parity** and **confirmed mismatch** sections are intended to be source-backed, not inferred from examples alone.
+- Statements about MLX mixed-dtype kernel behavior remain hypotheses unless they are explicitly documented by MLX or directly measured.
+- The text-mask mismatch is a confirmed Swift-vs-Diffusers difference, and MLX itself now appears to support both boolean and additive SDPA masks; this means the current Swift additive-mask path is an implementation choice, not an obvious MLX limitation.
+- Line numbers in upstream Diffusers may drift across revisions; the file-level behavior was revalidated for the local commit above before this report was updated.
+
 It intentionally separates findings into three buckets:
 
 1. **confirmed parity** — directly supported by current source code on both sides
@@ -40,6 +49,7 @@ It intentionally separates findings into three buckets:
 - MLX data types doc: default floating dtype is `float32`
 - MLX `random.normal`: default output dtype is `float32`
 - MLX fast SDPA: softmax runs in `float32` regardless of input precision
+- MLX fast SDPA source/docs: array masks may be boolean or additive
 - PyTorch SDPA: bool masks are supported; math backend keeps intermediates in `torch.float` for `torch.half` / `torch.bfloat16`
 
 See the references section at the end for links.
@@ -237,11 +247,13 @@ Evidence:
 
 Diffusers prompt path converts the tokenizer attention mask to `bool`:
 
-- `pipeline_z_image.py:234`
-- `pipeline_z_image_controlnet.py:288`
-- `pipeline_z_image_controlnet_inpaint.py:295`
+- `pipeline_z_image.py:233-239`
+- `pipeline_z_image_controlnet.py:287-293`
+- `pipeline_z_image_controlnet_inpaint.py:294-300`
 
 PyTorch SDPA accepts boolean masks directly, so this is a real implementation-level divergence.
+
+MLX also documents/supports boolean SDPA masks, so the current additive-mask path in `TextEncoder.swift` is not the only viable representation on the Swift side.
 
 ### 5) `weightsVariant` is not a full runtime precision selector in Swift
 
@@ -365,6 +377,8 @@ A/B compare:
 
 Measure both memory and latency during prompt encoding.
 
+The executable phase plan for the first three fixes now lives in `docs/dev_plans/runtime_precision_parity_improvement_plan.md`.
+
 ---
 
 ## Practical interpretation
@@ -416,4 +430,6 @@ If a single first fix is needed for tighter parity, it should be:
 - MLX data types: <https://ml-explore.github.io/mlx/build/html/python/data_types.html>
 - MLX `random.normal`: <https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.random.normal.html>
 - MLX fast SDPA: <https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.fast.scaled_dot_product_attention.html>
+- MLX fast SDPA Python binding source (bool/additive mask contract): `.build/checkouts/mlx-swift/Source/Cmlx/mlx/python/src/fast.cpp`
+- MLX fast SDPA tests (bool-mask equivalence probe): `.build/checkouts/mlx-swift/Source/Cmlx/mlx/python/tests/test_fast_sdpa.py`
 - PyTorch SDPA: <https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html>
