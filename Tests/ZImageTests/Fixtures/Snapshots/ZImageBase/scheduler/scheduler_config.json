@@ -1,5 +1,5 @@
 {
   "num_train_timesteps": 1000,
-  "shift": 3.0,
+  "shift": 6.0,
   "use_dynamic_shifting": false
 }

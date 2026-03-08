@@ -4,51 +4,70 @@ import XCTest
 
 final class ModelPathsResolutionTests: XCTestCase {
   func testResolveShardListsFromIndexAndFallbackDiscovery() throws {
-    let expectedTransformer = [
-      "transformer/diffusion_pytorch_model-00001-of-00003.safetensors",
-      "transformer/diffusion_pytorch_model-00002-of-00003.safetensors",
-      "transformer/diffusion_pytorch_model-00003-of-00003.safetensors",
-    ]
-    let expectedTextEncoder = [
-      "text_encoder/model-00001-of-00003.safetensors",
-      "text_encoder/model-00002-of-00003.safetensors",
-      "text_encoder/model-00003-of-00003.safetensors",
+    let expectedLayouts: [(fixtureName: String, transformer: [String], textEncoder: [String])] = [
+      (
+        fixtureName: "ZImageTurbo",
+        transformer: [
+          "transformer/diffusion_pytorch_model-00001-of-00003.safetensors",
+          "transformer/diffusion_pytorch_model-00002-of-00003.safetensors",
+          "transformer/diffusion_pytorch_model-00003-of-00003.safetensors",
+        ],
+        textEncoder: [
+          "text_encoder/model-00001-of-00003.safetensors",
+          "text_encoder/model-00002-of-00003.safetensors",
+          "text_encoder/model-00003-of-00003.safetensors",
+        ]
+      ),
+      (
+        fixtureName: "ZImageBase",
+        transformer: [
+          "transformer/diffusion_pytorch_model-00001-of-00002.safetensors",
+          "transformer/diffusion_pytorch_model-00002-of-00002.safetensors",
+        ],
+        textEncoder: [
+          "text_encoder/model-00001-of-00003.safetensors",
+          "text_encoder/model-00002-of-00003.safetensors",
+          "text_encoder/model-00003-of-00003.safetensors",
+        ]
+      ),
     ]
 
-    for fixtureName in ["ZImageTurbo", "ZImageBase"] {
+    for expected in expectedLayouts {
+      let fixtureName = expected.fixtureName
       let fixtureSnapshot = TestFixtures.snapshot(named: fixtureName)
 
       try TestFixtures.withTemporaryCopy(of: fixtureSnapshot) { snapshot in
-        for relative in expectedTransformer + expectedTextEncoder {
+        for relative in expected.transformer + expected.textEncoder {
           try TestFixtures.createEmptyFile(at: snapshot.appending(path: relative))
         }
 
         XCTAssertEqual(
           ZImageFiles.resolveTransformerWeights(at: snapshot),
-          expectedTransformer,
+          expected.transformer,
           "fixture=\(fixtureName)"
         )
         XCTAssertEqual(
           ZImageFiles.resolveTextEncoderWeights(at: snapshot),
-          expectedTextEncoder,
+          expected.textEncoder,
           "fixture=\(fixtureName)"
         )
 
         // Index weight_map values may already include the component prefix; accept either style.
         let transformerIndex = snapshot.appending(path: ZImageFiles.transformerIndex)
+        let prefixedTransformerEntries = expected.transformer.enumerated().map { offset, path in
+          "\"model.diffusion_model.layers.\(offset).weight\": \"\(path)\""
+        }.joined(separator: ",\n      ")
         let prefixedTransformerIndex = """
           {
             "weight_map": {
-              "model.diffusion_model.layers.0.weight": "transformer/diffusion_pytorch_model-00001-of-00003.safetensors",
-              "model.diffusion_model.layers.1.weight": "transformer/diffusion_pytorch_model-00002-of-00003.safetensors",
-              "model.diffusion_model.layers.2.weight": "transformer/diffusion_pytorch_model-00003-of-00003.safetensors"
+              \(prefixedTransformerEntries)
             }
           }
           """
         try prefixedTransformerIndex.data(using: .utf8)!.write(to: transformerIndex)
         XCTAssertEqual(
           ZImageFiles.resolveTransformerWeights(at: snapshot),
-          expectedTransformer,
+          expected.transformer,
           "fixture=\(fixtureName)"
         )
 
@@ -59,14 +78,14 @@ final class ModelPathsResolutionTests: XCTestCase {
         try missingTransformerIndex.data(using: .utf8)!.write(to: transformerIndex)
         XCTAssertEqual(
           ZImageFiles.resolveTransformerWeights(at: snapshot),
-          expectedTransformer,
+          expected.transformer,
           "fixture=\(fixtureName)"
         )
 
         try FileManager.default.removeItem(at: transformerIndex)
         XCTAssertEqual(
           ZImageFiles.resolveTransformerWeights(at: snapshot),
-          expectedTransformer,
+          expected.transformer,
           "fixture=\(fixtureName)"
         )
 
@@ -77,14 +96,14 @@ final class ModelPathsResolutionTests: XCTestCase {
         try missingTextEncoderIndex.data(using: .utf8)!.write(to: textEncoderIndex)
         XCTAssertEqual(
           ZImageFiles.resolveTextEncoderWeights(at: snapshot),
-          expectedTextEncoder,
+          expected.textEncoder,
           "fixture=\(fixtureName)"
         )
 
         try FileManager.default.removeItem(at: textEncoderIndex)
         XCTAssertEqual(
           ZImageFiles.resolveTextEncoderWeights(at: snapshot),
-          expectedTextEncoder,
+          expected.textEncoder,
           "fixture=\(fixtureName)"
         )
       }

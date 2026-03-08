@@ -141,7 +141,7 @@ The model card’s “best practice” settings for **Z‑Image (base)** are mea
 
 - **CFG is enabled** (uses `guidance_scale` and supports `negative_prompt`)
 - **More steps**: recommend `num_inference_steps` in the ~28–50 range (28 is suggested as “fastest”)
-- Example code uses `cfg_normalization=True`
+- The current model-card example uses `cfg_normalization=False`
 
 Typical usage snippet (from the model card): [Hugging Face](https://huggingface.co/Tongyi-MAI/Z-Image)
 
@@ -162,7 +162,7 @@ image = pipe(
     num_inference_steps=50,
     height=1024,
     width=1024,
-    cfg_normalization=True,
+    cfg_normalization=False,
 ).images[0]
 ```
 
