@@ -47,6 +47,8 @@ Useful flags:
 - `--negative-prompt/--np`: optional negative prompt
 - `--width/-W`, `--height/-H`: output size
 - `--steps/-s`, `--guidance/-g`: denoising and CFG settings
+- `--cfg-normalization`: clamp CFG output norm back to the positive-branch norm
+- `--cfg-truncation`: disable CFG after the normalized timestep passes the given value
 - `--seed`: deterministic sampling seed
 - `--output/-o`: output path, default `z-image.png`
 - `--model/-m`: model id, local directory, or local `.safetensors`
@@ -75,6 +77,13 @@ Explicit flags still override those values field by field. Example:
 ```
 
 Important nuance: preset lookup is id-based. Local paths and unknown model ids keep the Turbo-compatible preset unless you set the relevant flags explicitly.
+
+### CFG Parity Controls
+
+Two additional flags mirror the Base-oriented Diffusers CFG controls:
+
+- `--cfg-normalization`: when enabled, the guided prediction is renormalized so it does not exceed the positive-branch norm
+- `--cfg-truncation <value>`: if the normalized denoising timestep rises above `<value>`, CFG is skipped for the rest of the run. `1.0` keeps CFG active for the full schedule.
 
 ## Model Specs (`--model`)
 
@@ -146,6 +155,7 @@ Important `control` flags:
 - `--control-file/--cf`: optional file selector within a repo or directory
 - `--control-scale/--cs`: control-context scale, default `0.75`
 - `--width/-W`, `--height/-H`, `--steps/-s`, `--guidance/-g`
+- `--cfg-normalization`, `--cfg-truncation`
 - `--weights-variant`, `--cache-limit`, `--max-sequence-length`, `--no-progress`
 - `--log-control-memory`: emit control-path memory markers
 

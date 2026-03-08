@@ -45,6 +45,8 @@ enum ZImageCLI {
     var height: Int?
     var steps: Int?
     var guidance: Float?
+    var cfgNormalization = false
+    var cfgTruncation: Float = 1.0
     var seed: UInt64?
     var outputPath = "z-image.png"
     var model: String?
@@ -75,6 +77,10 @@ enum ZImageCLI {
         steps = optionalIntValue(for: arg, iterator: &iterator, minimum: 1) ?? steps
       case "--guidance", "-g":
         guidance = optionalFloatValue(for: arg, iterator: &iterator) ?? guidance
+      case "--cfg-normalization":
+        cfgNormalization = true
+      case "--cfg-truncation":
+        cfgTruncation = floatValue(for: arg, iterator: &iterator, fallback: cfgTruncation)
       case "--seed":
         seed = UInt64(nextValue(for: arg, iterator: &iterator))
       case "--output", "-o":
@@ -150,6 +156,8 @@ enum ZImageCLI {
       height: preset.height,
       steps: preset.steps,
       guidanceScale: preset.guidanceScale,
+      cfgNormalization: cfgNormalization,
+      cfgTruncation: cfgTruncation,
       seed: seed,
       outputPath: URL(fileURLWithPath: outputPath),
       model: model,
@@ -205,6 +213,8 @@ enum ZImageCLI {
         --height, -H           Output height (default \(ZImageModelMetadata.recommendedHeight))
         --steps, -s            Inference steps (default: model-aware, 9 for Turbo / 50 for Base)
         --guidance, -g         Guidance scale (default: model-aware, 0.0 for Turbo / 4.0 for Base)
+        --cfg-normalization    Clamp CFG output norm to the positive-branch norm
+        --cfg-truncation       Disable CFG after normalized timestep exceeds this value (default: 1.0)
         --seed                 Random seed
         --output, -o           Output path (default z-image.png)
         --model, -m            Model path or HuggingFace ID (default: \(ZImageRepository.id))
@@ -489,6 +499,8 @@ enum ZImageCLI {
     var height: Int?
     var steps: Int?
     var guidance: Float?
+    var cfgNormalization = false
+    var cfgTruncation: Float = 1.0
     var seed: UInt64?
     var outputPath = "z-image-control.png"
     var model: String?
@@ -525,6 +537,10 @@ enum ZImageCLI {
         steps = optionalIntValue(for: arg, iterator: &iterator, minimum: 1) ?? steps
       case "--guidance", "-g":
         guidance = optionalFloatValue(for: arg, iterator: &iterator) ?? guidance
+      case "--cfg-normalization":
+        cfgNormalization = true
+      case "--cfg-truncation":
+        cfgTruncation = floatValue(for: arg, iterator: &iterator, fallback: cfgTruncation)
       case "--seed":
         seed = UInt64(nextValue(for: arg, iterator: &iterator))
       case "--output", "-o":
@@ -639,6 +655,8 @@ enum ZImageCLI {
       height: preset.height,
       steps: preset.steps,
       guidanceScale: preset.guidanceScale,
+      cfgNormalization: cfgNormalization,
+      cfgTruncation: cfgTruncation,
       seed: seed,
       outputPath: URL(fileURLWithPath: outputPath),
       model: model,
@@ -685,6 +703,8 @@ enum ZImageCLI {
         --height, -H              Output height (default \(ZImageModelMetadata.recommendedHeight))
         --steps, -s               Inference steps (default: model-aware, 9 for Turbo / 50 for Base)
         --guidance, -g            Guidance scale (default: model-aware, 0.0 for Turbo / 4.0 for Base)
+        --cfg-normalization       Clamp CFG output norm to the positive-branch norm
+        --cfg-truncation          Disable CFG after normalized timestep exceeds this value (default: 1.0)
         --seed                    Random seed
         --output, -o              Output path (default z-image-control.png)
         --model, -m               Model path or HuggingFace ID (default: \(ZImageRepository.id))

@@ -13,6 +13,8 @@ public struct ZImageGenerationRequest: Sendable {
   public var height: Int
   public var steps: Int
   public var guidanceScale: Float
+  public var cfgNormalization: Bool
+  public var cfgTruncation: Float
   public var seed: UInt64?
   public var outputPath: URL
   public var model: String?
@@ -33,6 +35,8 @@ public struct ZImageGenerationRequest: Sendable {
     height: Int = ZImageModelMetadata.recommendedHeight,
     steps: Int = ZImageModelMetadata.recommendedInferenceSteps,
     guidanceScale: Float = ZImageModelMetadata.recommendedGuidanceScale,
+    cfgNormalization: Bool = false,
+    cfgTruncation: Float = 1.0,
     seed: UInt64? = nil,
     outputPath: URL = URL(fileURLWithPath: "z-image.png"),
     model: String? = nil,
@@ -49,6 +53,8 @@ public struct ZImageGenerationRequest: Sendable {
     self.height = height
     self.steps = steps
     self.guidanceScale = guidanceScale
+    self.cfgNormalization = cfgNormalization
+    self.cfgTruncation = cfgTruncation
     self.seed = seed
     self.outputPath = outputPath
     self.model = model
@@ -739,7 +745,7 @@ public final class ZImagePipeline {
     progressHandler?(GenerationProgress(stage: .encodingText, stepIndex: 0, totalSteps: request.steps))
     logger.info("Encoding prompts...")
 
-    let doCFG = request.guidanceScale > 1.0
+    let doCFG = PipelineUtilities.usesClassifierFreeGuidance(guidanceScale: request.guidanceScale)
     let promptEmbeds: MLXArray
     let negativeEmbeds: MLXArray?
     do {
@@ -786,7 +792,7 @@ public final class ZImagePipeline {
     let vaeDivisor = modelConfigs.vae.latentDivisor
     let latentH = max(1, request.height / vaeDivisor)
     let latentW = max(1, request.width / vaeDivisor)
-    let shape: [Int] = [1, ZImageModelMetadata.Transformer.inChannels, latentH, latentW]
+    let shape: [Int] = [1, modelConfigs.transformer.inChannels, latentH, latentW]
     let randomKey: MLXArray? = request.seed.map { MLXRandom.key($0) }
     var latents = MLXRandom.normal(shape, loc: 0, scale: 1, key: randomKey)
 
@@ -817,10 +823,16 @@ public final class ZImagePipeline {
         let timestep = timestepsArray[stepIndex]
         let normalizedTimestep = (1000.0 - timestep) / 1000.0
         let timestepArray = MLXArray([normalizedTimestep], [1])
+        let currentGuidanceScale = PipelineUtilities.effectiveGuidanceScale(
+          guidanceScale: request.guidanceScale,
+          normalizedTimestep: normalizedTimestep,
+          cfgTruncation: request.cfgTruncation
+        )
+        let applyCFG = doCFG && currentGuidanceScale > 0 && negativeEmbeds != nil
 
         var modelLatents = latents
         var embeds = promptEmbeds
-        if doCFG, let ne = negativeEmbeds {
+        if applyCFG, let ne = negativeEmbeds {
           modelLatents = MLX.concatenated([latents, latents], axis: 0)
           embeds = MLX.concatenated([promptEmbeds, ne], axis: 0)
         }
@@ -828,12 +840,16 @@ public final class ZImagePipeline {
         let typedModelLatents = PipelineUtilities.castModelInputToRuntimeDTypeIfNeeded(modelLatents, module: transformer)
         let noisePred = transformer.forward(latents: typedModelLatents, timestep: timestepArray, promptEmbeds: embeds)
         let guidedNoise: MLXArray
-        if doCFG, negativeEmbeds != nil {
+        if applyCFG, negativeEmbeds != nil {
           let batch = latents.dim(0)
           let positive = noisePred[0..<batch, 0..., 0..., 0...]
           let negative = noisePred[batch..<batch * 2, 0..., 0..., 0...]
-          let guidanceDelta = subtract(positive, negative)
-          guidedNoise = add(positive, multiply(request.guidanceScale, guidanceDelta))
+          guidedNoise = PipelineUtilities.guidedNoisePrediction(
+            positive: positive,
+            negative: negative,
+            guidanceScale: currentGuidanceScale,
+            cfgNormalization: request.cfgNormalization
+          )
         } else {
           guidedNoise = noisePred
         }

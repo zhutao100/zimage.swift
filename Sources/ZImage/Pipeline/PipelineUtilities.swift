@@ -70,6 +70,57 @@ public enum PipelineUtilities {
     return Float(imageSeqLen) * m + b
   }
 
+  static func usesClassifierFreeGuidance(guidanceScale: Float) -> Bool {
+    guidanceScale > 0
+  }
+
+  static func effectiveGuidanceScale(
+    guidanceScale: Float,
+    normalizedTimestep: Float,
+    cfgTruncation: Float
+  ) -> Float {
+    guard usesClassifierFreeGuidance(guidanceScale: guidanceScale) else { return 0 }
+    guard cfgTruncation <= 1, normalizedTimestep > cfgTruncation else {
+      return guidanceScale
+    }
+    return 0
+  }
+
+  static func guidedNoisePrediction(
+    positive: MLXArray,
+    negative: MLXArray,
+    guidanceScale: Float,
+    cfgNormalization: Bool
+  ) -> MLXArray {
+    var prediction = add(positive, multiply(guidanceScale, subtract(positive, negative)))
+    guard cfgNormalization else { return prediction }
+
+    let positiveNorm = l2Norm(positive)
+    let predictionNorm = l2Norm(prediction)
+    let normalizationScale = cfgNormalizationScale(
+      positiveNorm: positiveNorm,
+      predictionNorm: predictionNorm,
+      cfgNormalization: cfgNormalization
+    )
+    guard normalizationScale < 1 else {
+      return prediction
+    }
+
+    prediction = multiply(normalizationScale, prediction)
+    return prediction
+  }
+
+  static func cfgNormalizationScale(
+    positiveNorm: Float,
+    predictionNorm: Float,
+    cfgNormalization: Bool
+  ) -> Float {
+    guard cfgNormalization, positiveNorm > 0, predictionNorm > positiveNorm else {
+      return 1.0
+    }
+    return positiveNorm / predictionNorm
+  }
+
   static func runtimeDType(for module: Module) -> DType? {
     for (_, parameter) in module.parameters().flattened() {
       switch parameter.dtype {
@@ -148,5 +199,9 @@ public enum PipelineUtilities {
         "Height must be divisible by \(scale) (got \(height)). Please adjust to a multiple of \(scale)."
       }
     }
+  }
+
+  private static func l2Norm(_ array: MLXArray) -> Float {
+    sum(square(array.asType(.float32))).item(Float.self).squareRoot()
   }
 }

@@ -49,6 +49,8 @@ The library is pipeline-first:
 - `ZImageGenerationRequest` + `ZImagePipeline`
 - `ZImageControlGenerationRequest` + `ZImageControlPipeline`
 
+Both request types now expose Diffusers-style CFG truncation and normalization controls in addition to the base guidance scale.
+
 Current asymmetry to know about:
 
 - the library control request type already has LoRA and prompt-enhancement fields

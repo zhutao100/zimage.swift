@@ -87,6 +87,8 @@ Common CLI settings:
 - known `Tongyi-MAI` model ids apply model-aware presets:
   - Turbo: `1024x1024`, `9` steps, guidance `0.0`
   - Base: `1024x1024`, `50` steps, guidance `4.0`
+- `--cfg-normalization`: clamp CFG output norm back to the positive-branch norm
+- `--cfg-truncation`: turn CFG off after the normalized denoising timestep passes the given value
 - `--weights-variant`: precision-specific weights selection such as `fp16` or `bf16`
 - `--cache-limit`: MLX GPU cache limit in MB
 - `--max-sequence-length`: prompt token limit for text encoding
