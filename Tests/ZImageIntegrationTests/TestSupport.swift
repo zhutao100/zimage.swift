@@ -1,6 +1,26 @@
 import Foundation
 import XCTest
 
+private let truthyEnvironmentValues: Set<String> = ["1", "true", "yes", "on"]
+
+func integrationTestsEnabled() -> Bool {
+  guard
+    let enabled =
+      ProcessInfo.processInfo.environment["ZIMAGE_RUN_INTEGRATION_TESTS"]?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+  else {
+    return false
+  }
+  return truthyEnvironmentValues.contains(enabled)
+}
+
+func requireIntegrationTestsEnabled() throws {
+  guard integrationTestsEnabled() else {
+    throw XCTSkip("Set ZIMAGE_RUN_INTEGRATION_TESTS=1 to enable integration tests.")
+  }
+}
+
 func ensureMLXMetalLibraryColocated(for testCase: AnyClass) throws {
   guard let executableURL = Bundle(for: testCase).executableURL else {
     throw XCTSkip("Cannot determine test executable location for colocating mlx.metallib.")

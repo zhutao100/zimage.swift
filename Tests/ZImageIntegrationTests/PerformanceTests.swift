@@ -5,7 +5,7 @@ import XCTest
 
 /// Performance tests for Z-Image pipeline.
 /// Tracks inference time, memory usage, and per-component breakdown.
-/// Run with: xcodebuild test -scheme zimage.swift-Package -destination 'platform=macOS' -only-testing:ZImageIntegrationTests/PerformanceTests -parallel-testing-enabled NO
+/// Run with: ZIMAGE_RUN_INTEGRATION_TESTS=1 swift test --filter PerformanceTests
 final class PerformanceTests: XCTestCase {
   /// Shared pipeline instance to avoid reloading model for each test
   private nonisolated(unsafe) static var sharedPipeline: ZImagePipeline?
@@ -30,8 +30,7 @@ final class PerformanceTests: XCTestCase {
   /// Initialize shared pipeline once for all tests
   override class func setUp() {
     super.setUp()
-    // Skip pipeline creation in CI
-    if ProcessInfo.processInfo.environment["CI"] == nil {
+    if integrationTestsEnabled(), ProcessInfo.processInfo.environment["CI"] == nil {
       sharedPipeline = ZImagePipeline()
     }
   }
@@ -44,10 +43,16 @@ final class PerformanceTests: XCTestCase {
     super.tearDown()
   }
 
+  override func setUpWithError() throws {
+    try super.setUpWithError()
+    try requireIntegrationTestsEnabled()
+    try ensureMLXMetalLibraryColocated(for: type(of: self))
+  }
+
   /// Get the shared pipeline or skip test if not available
   private func getPipeline() throws -> ZImagePipeline {
     guard let pipeline = Self.sharedPipeline else {
-      throw XCTSkip("Pipeline not available (likely CI environment)")
+      throw XCTSkip("Pipeline not available. Enable integration tests and run outside CI.")
     }
     return pipeline
   }
@@ -156,7 +161,7 @@ final class PerformanceTests: XCTestCase {
       memoryReadings.append(metrics.peakMemoryUsage)
 
       // Allow some GPU cache clearing
-      GPU.clearCache()
+      Memory.clearCache()
     }
 
     // Memory shouldn't grow unboundedly

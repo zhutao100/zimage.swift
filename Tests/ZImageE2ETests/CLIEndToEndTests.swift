@@ -2,12 +2,11 @@ import Foundation
 import XCTest
 
 /// End-to-end tests for ZImageCLI command line interface.
-/// These tests build and run the actual CLI executable.
-/// Run with: xcodebuild test -scheme zimage.swift-Package -destination 'platform=macOS' -only-testing:ZImageE2ETests -parallel-testing-enabled NO
+/// These tests run the SwiftPM-built CLI executable.
+/// Run with: ZIMAGE_RUN_E2E_TESTS=1 swift test --filter CLIEndToEndTests
 final class CLIEndToEndTests: XCTestCase {
 
   private var cliPath: String?
-  private static let cliDependencyTimestamp: Date = newestCLIDependencyTimestamp()
 
   /// Project root directory (derived from test file location)
   private static let projectRoot: URL = {
@@ -29,10 +28,13 @@ final class CLIEndToEndTests: XCTestCase {
     return url
   }()
 
-  override func setUp() async throws {
-    try await super.setUp()
-    // Build CLI if not already built
-    cliPath = try await buildCLI()
+  override func setUpWithError() throws {
+    try super.setUpWithError()
+    try requireE2ETestsEnabled()
+
+    let cliURL = try resolveSwiftPMExecutable(named: "ZImageCLI", for: type(of: self))
+    try ensureMLXMetalLibraryAdjacent(to: cliURL)
+    cliPath = cliURL.path
   }
 
   override class func tearDown() {
@@ -288,52 +290,6 @@ final class CLIEndToEndTests: XCTestCase {
 
   // MARK: - Helper Functions
 
-  private func buildCLI() async throws -> String {
-    // Use project-local .build folder for xcodebuild outputs
-    let buildDir = Self.projectRoot.appendingPathComponent(".build")
-
-    // Check if CLI already exists in local build folder
-    let releasePath = buildDir.appendingPathComponent("Build/Products/Release/ZImageCLI")
-    let debugPath = buildDir.appendingPathComponent("Build/Products/Debug/ZImageCLI")
-    if let existing = [releasePath, debugPath].first(where: { FileManager.default.fileExists(atPath: $0.path) }),
-      Self.isCLIBinaryUpToDate(existing)
-    {
-      return existing.path
-    }
-
-    // Try to build with xcodebuild to local build folder (proper Metal library bundling)
-    let buildProcess = Process()
-    buildProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xcodebuild")
-    buildProcess.arguments = [
-      "build",
-      "-scheme", "ZImageCLI",
-      "-configuration", "Release",
-      "-destination", "platform=macOS",
-      "-derivedDataPath", buildDir.path,
-    ]
-    buildProcess.currentDirectoryURL = Self.projectRoot
-
-    let pipe = Pipe()
-    buildProcess.standardOutput = pipe
-    buildProcess.standardError = pipe
-
-    try buildProcess.run()
-    buildProcess.waitUntilExit()
-
-    if buildProcess.terminationStatus == 0 {
-      // Check for the built CLI
-      if FileManager.default.fileExists(atPath: releasePath.path) {
-        return releasePath.path
-      }
-      if FileManager.default.fileExists(atPath: debugPath.path) {
-        return debugPath.path
-      }
-    }
-
-    // If build fails, return empty string (tests will be skipped)
-    return ""
-  }
-
   private func runCLI(_ arguments: [String], timeout: TimeInterval = 60) async throws -> (
     stdout: String, stderr: String, exitCode: Int32
   ) {
@@ -375,7 +331,7 @@ final class CLIEndToEndTests: XCTestCase {
 
   private func skipIfNoCLI() throws {
     guard let path = cliPath, !path.isEmpty, FileManager.default.fileExists(atPath: path) else {
-      throw XCTSkip("CLI not built. Run 'swift build -c release --product ZImageCLI' first.")
+      throw XCTSkip("CLI not built. Run `swift build --product ZImageCLI` first.")
     }
   }
 
@@ -407,43 +363,5 @@ final class CLIEndToEndTests: XCTestCase {
     case cliNotBuilt
     case timeout
     case executionFailed(String)
-  }
-
-  private static func isCLIBinaryUpToDate(_ url: URL) -> Bool {
-    guard let binaryDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-    else {
-      return false
-    }
-    return binaryDate >= cliDependencyTimestamp
-  }
-
-  private static func newestCLIDependencyTimestamp() -> Date {
-    let fm = FileManager.default
-    var newest = Date.distantPast
-
-    func consider(_ url: URL) {
-      guard let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else {
-        return
-      }
-      if date > newest { newest = date }
-    }
-
-    consider(projectRoot.appendingPathComponent("Package.swift"))
-    consider(projectRoot.appendingPathComponent("Package.resolved"))
-
-    let sourcesDir = projectRoot.appendingPathComponent("Sources")
-    if let enumerator = fm.enumerator(
-      at: sourcesDir,
-      includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-      options: [.skipsHiddenFiles]
-    ) {
-      for case let fileURL as URL in enumerator {
-        let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
-        guard values?.isRegularFile == true, let date = values?.contentModificationDate else { continue }
-        if date > newest { newest = date }
-      }
-    }
-
-    return newest
   }
 }

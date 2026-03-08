@@ -28,7 +28,7 @@ import XCTest
     override class func setUp() {
       super.setUp()
 
-      if ProcessInfo.processInfo.environment["CI"] == nil {
+      if integrationTestsEnabled(), ProcessInfo.processInfo.environment["CI"] == nil {
         sharedPipeline = ZImageControlPipeline()
       }
     }
@@ -40,9 +40,15 @@ import XCTest
       super.tearDown()
     }
 
+    override func setUpWithError() throws {
+      try super.setUpWithError()
+      try requireIntegrationTestsEnabled()
+      try ensureMLXMetalLibraryColocated(for: type(of: self))
+    }
+
     private func getPipeline() throws -> ZImageControlPipeline {
       guard let pipeline = Self.sharedPipeline else {
-        throw XCTSkip("Pipeline not available (likely CI environment)")
+        throw XCTSkip("Pipeline not available. Enable integration tests and run outside CI.")
       }
       return pipeline
     }

@@ -44,7 +44,8 @@ let package = Package(
         "ZImage",
         .product(name: "MLX", package: "mlx-swift"),
       ],
-      path: "Tests/ZImageTests"
+      path: "Tests/ZImageTests",
+      exclude: ["Fixtures/Snapshots"]
     ),
     .testTarget(
       name: "ZImageIntegrationTests",

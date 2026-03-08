@@ -15,7 +15,7 @@ final class LoRAIntegrationTests: XCTestCase {
   override class func setUp() {
     super.setUp()
 
-    if ProcessInfo.processInfo.environment["CI"] == nil {
+    if integrationTestsEnabled(), ProcessInfo.processInfo.environment["CI"] == nil {
       sharedPipeline = ZImagePipeline()
     }
   }
@@ -27,9 +27,16 @@ final class LoRAIntegrationTests: XCTestCase {
     try? FileManager.default.removeItem(at: outputDir)
     super.tearDown()
   }
+
+  override func setUpWithError() throws {
+    try super.setUpWithError()
+    try requireIntegrationTestsEnabled()
+    try ensureMLXMetalLibraryColocated(for: type(of: self))
+  }
+
   private func getPipeline() throws -> ZImagePipeline {
     guard let pipeline = Self.sharedPipeline else {
-      throw XCTSkip("Pipeline not available (likely CI environment)")
+      throw XCTSkip("Pipeline not available. Enable integration tests and run outside CI.")
     }
     return pipeline
   }

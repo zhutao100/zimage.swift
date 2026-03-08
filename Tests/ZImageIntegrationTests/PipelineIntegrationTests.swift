@@ -6,7 +6,7 @@ import XCTest
 
 /// Integration tests for ZImagePipeline using real model inference.
 /// These tests require downloading the 8-bit quantized model (~7.5GB).
-/// Run with: xcodebuild test -scheme zimage.swift-Package -destination 'platform=macOS' -only-testing:ZImageIntegrationTests/PipelineIntegrationTests -parallel-testing-enabled NO
+/// Run with: ZIMAGE_RUN_INTEGRATION_TESTS=1 swift test --filter PipelineIntegrationTests
 final class PipelineIntegrationTests: XCTestCase {
   /// Shared pipeline instance to avoid reloading model for each test
   private nonisolated(unsafe) static var sharedPipeline: ZImagePipeline?
@@ -31,8 +31,7 @@ final class PipelineIntegrationTests: XCTestCase {
   /// Initialize shared pipeline once for all tests
   override class func setUp() {
     super.setUp()
-    // Skip pipeline creation in CI
-    if ProcessInfo.processInfo.environment["CI"] == nil {
+    if integrationTestsEnabled(), ProcessInfo.processInfo.environment["CI"] == nil {
       sharedPipeline = ZImagePipeline()
     }
   }
@@ -47,13 +46,14 @@ final class PipelineIntegrationTests: XCTestCase {
 
   override func setUpWithError() throws {
     try super.setUpWithError()
+    try requireIntegrationTestsEnabled()
     try ensureMLXMetalLibraryColocated(for: type(of: self))
   }
 
   /// Get the shared pipeline or skip test if not available
   private func getPipeline() throws -> ZImagePipeline {
     guard let pipeline = Self.sharedPipeline else {
-      throw XCTSkip("Pipeline not available (likely CI environment)")
+      throw XCTSkip("Pipeline not available. Enable integration tests and run outside CI.")
     }
     return pipeline
   }

@@ -40,7 +40,7 @@ That workflow is mainly for local experimentation. The default repo path is stil
 Default verification path:
 
 ```bash
-xcodebuild test -scheme zimage.swift-Package -destination 'platform=macOS' -enableCodeCoverage NO -only-testing:ZImageTests
+swift test
 ```
 
 Heavier test suites are opt-in:
@@ -50,12 +50,24 @@ Heavier test suites are opt-in:
 
 Use those only when the task specifically needs them.
 
+Enable the heavier suites explicitly:
+
+```bash
+ZIMAGE_RUN_INTEGRATION_TESTS=1 swift test --filter PipelineIntegrationTests
+ZIMAGE_RUN_INTEGRATION_TESTS=1 swift test --filter ControlNetIntegrationTests
+ZIMAGE_RUN_INTEGRATION_TESTS=1 swift test --filter LoRAIntegrationTests
+ZIMAGE_RUN_INTEGRATION_TESTS=1 swift test --filter PerformanceTests
+ZIMAGE_RUN_E2E_TESTS=1 swift test --filter CLIEndToEndTests
+```
+
+`ZImageE2ETests` now use the `ZImageCLI` executable built by the same SwiftPM stack as `swift test`. They no longer invoke `xcodebuild` internally.
+
 ### Opt-In Base Smoke Test
 
 For a real-model Base sanity check without enabling the full integration suite by default:
 
 ```bash
-scripts/build_mlx_metallib.sh -c debug
+ZIMAGE_RUN_INTEGRATION_TESTS=1 \
 ZIMAGE_RUN_BASE_SMOKE=1 \
 ZIMAGE_BASE_SMOKE_MODEL="$HOME/.cache/huggingface/hub/models--Tongyi-MAI--Z-Image/snapshots/04cc4abb7c5069926f75c9bfde9ef43d49423021" \
 swift test --filter PipelineIntegrationTests/testBaseModelSmokeGeneration
