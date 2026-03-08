@@ -54,6 +54,40 @@ public struct ZImagePreset: Sendable, Equatable {
     }
   }
 
+  public func applying(
+    width: Int? = nil,
+    height: Int? = nil,
+    steps: Int? = nil,
+    guidanceScale: Float? = nil,
+    maxSequenceLength: Int? = nil
+  ) -> ZImagePreset {
+    ZImagePreset(
+      width: width ?? self.width,
+      height: height ?? self.height,
+      steps: steps ?? self.steps,
+      guidanceScale: guidanceScale ?? self.guidanceScale,
+      maxSequenceLength: maxSequenceLength ?? self.maxSequenceLength,
+      negativePrompt: negativePrompt
+    )
+  }
+
+  public static func resolved(
+    for modelSpec: String?,
+    width: Int? = nil,
+    height: Int? = nil,
+    steps: Int? = nil,
+    guidanceScale: Float? = nil,
+    maxSequenceLength: Int? = nil
+  ) -> ZImagePreset {
+    defaults(for: modelSpec).applying(
+      width: width,
+      height: height,
+      steps: steps,
+      guidanceScale: guidanceScale,
+      maxSequenceLength: maxSequenceLength
+    )
+  }
+
   public static let zImageTurbo = ZImagePreset(
     width: ZImageModelMetadata.recommendedWidth,
     height: ZImageModelMetadata.recommendedHeight,

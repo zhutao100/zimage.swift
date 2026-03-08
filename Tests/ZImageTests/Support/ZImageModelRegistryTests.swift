@@ -27,4 +27,33 @@ final class ZImageModelRegistryTests: XCTestCase {
     XCTAssertTrue(ZImageModelRegistry.areZImageVariants(ZImageKnownModel.zImageTurbo.id, ZImageKnownModel.zImage.id))
     XCTAssertTrue(ZImageModelRegistry.areZImageVariants("Tongyi-MAI/Z-Image:main", "Tongyi-MAI/Z-Image-Turbo:main"))
   }
+
+  func testResolvedPresetUsesKnownBaseDefaults() {
+    let base = ZImagePreset.resolved(for: "Tongyi-MAI/Z-Image:main")
+
+    XCTAssertEqual(base.width, 1024)
+    XCTAssertEqual(base.height, 1024)
+    XCTAssertEqual(base.steps, 50)
+    XCTAssertEqual(base.guidanceScale, 4.0)
+  }
+
+  func testResolvedPresetPreservesExplicitOverrides() {
+    let resolved = ZImagePreset.resolved(
+      for: ZImageKnownModel.zImage.id,
+      steps: 28,
+      guidanceScale: 3.5
+    )
+
+    XCTAssertEqual(resolved.width, 1024)
+    XCTAssertEqual(resolved.height, 1024)
+    XCTAssertEqual(resolved.steps, 28)
+    XCTAssertEqual(resolved.guidanceScale, 3.5)
+  }
+
+  func testResolvedPresetFallsBackToTurboForUnknownModelId() {
+    let resolved = ZImagePreset.resolved(for: "example/local-base-path")
+
+    XCTAssertEqual(resolved.steps, ZImagePreset.zImageTurbo.steps)
+    XCTAssertEqual(resolved.guidanceScale, ZImagePreset.zImageTurbo.guidanceScale)
+  }
 }

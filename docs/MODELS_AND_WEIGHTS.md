@@ -160,7 +160,9 @@ Source of truth:
 
 ### Wrong Results From `Tongyi-MAI/Z-Image`
 
-The CLI still starts from Turbo-oriented defaults. For the Base model, set `--steps` and `--guidance` explicitly.
+For the built-in `Tongyi-MAI/Z-Image` id, the CLI now applies Base-friendly defaults (`50` steps, guidance `4.0`).
+
+If you point `--model` at a local Base snapshot or another unknown alias, the CLI cannot identify it as Base ahead of load time and will keep the Turbo-compatible preset unless you set `--steps` and `--guidance` explicitly.
 
 ### Offline Reuse
 

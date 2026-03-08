@@ -65,8 +65,6 @@ Base model:
 ./ZImageCLI \
   -m Tongyi-MAI/Z-Image \
   -p "a black tiger in a bamboo forest" \
-  --steps 50 \
-  --guidance 4 \
   -o base.png
 ```
 
@@ -86,6 +84,9 @@ ControlNet:
 Common CLI settings:
 
 - `--model/-m`: Hugging Face repo id, local model directory, or local `.safetensors`
+- known `Tongyi-MAI` model ids apply model-aware presets:
+  - Turbo: `1024x1024`, `9` steps, guidance `0.0`
+  - Base: `1024x1024`, `50` steps, guidance `4.0`
 - `--weights-variant`: precision-specific weights selection such as `fp16` or `bf16`
 - `--cache-limit`: MLX GPU cache limit in MB
 - `--max-sequence-length`: prompt token limit for text encoding
@@ -101,7 +102,7 @@ The authoritative details for model resolution, cache lookup, AIO checkpoints, q
 
 ## Current Limitations
 
-- CLI defaults remain Turbo-oriented even when `--model Tongyi-MAI/Z-Image` is selected, so Base runs should set `--steps` and `--guidance` explicitly.
+- Model-aware CLI defaults currently key off the known `Tongyi-MAI` ids. Local paths and unknown aliases still fall back to Turbo-compatible defaults unless you set `--steps` and `--guidance` explicitly.
 - `ZImageCLI control` exposes control, inpainting, and `--log-control-memory`, but it does not currently expose the control-pipeline LoRA and prompt-enhancement hooks that exist in the library request type.
 - First-time downloads are large, and high-resolution runs can still be memory-heavy on unified-memory systems.
 - The CLI target is macOS-only. The package also declares an iOS library target, but there is no first-party sample app in this repo.

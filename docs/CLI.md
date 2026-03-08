@@ -60,23 +60,21 @@ Useful flags:
 
 ### Important Default Behavior
 
-The CLI defaults are tuned for `Tongyi-MAI/Z-Image-Turbo`:
+The CLI applies model-aware defaults for the built-in `Tongyi-MAI` model ids:
 
-- width: `1024`
-- height: `1024`
-- steps: `9`
-- guidance: `0.0`
+- `Tongyi-MAI/Z-Image-Turbo`: `1024x1024`, `9` steps, guidance `0.0`
+- `Tongyi-MAI/Z-Image`: `1024x1024`, `50` steps, guidance `4.0`
 
-Those defaults do not change automatically when you pass `--model Tongyi-MAI/Z-Image`, so Base runs should set the relevant knobs explicitly:
+Explicit flags still override those values field by field. Example:
 
 ```bash
 ./ZImageCLI \
   --model Tongyi-MAI/Z-Image \
   --prompt "a black tiger in a bamboo forest" \
-  --steps 50 \
-  --guidance 4 \
   --output base.png
 ```
+
+Important nuance: preset lookup is id-based. Local paths and unknown model ids keep the Turbo-compatible preset unless you set the relevant flags explicitly.
 
 ## Model Specs (`--model`)
 
@@ -150,6 +148,8 @@ Important `control` flags:
 - `--width/-W`, `--height/-H`, `--steps/-s`, `--guidance/-g`
 - `--weights-variant`, `--cache-limit`, `--max-sequence-length`, `--no-progress`
 - `--log-control-memory`: emit control-path memory markers
+
+Known `Tongyi-MAI` model ids use the same model-aware defaults on the `control` subcommand. Local paths and unknown ids still need explicit sampling flags if you do not want the Turbo-compatible preset.
 
 At least one of `--control-image`, `--inpaint-image`, or `--mask` must be present.
 

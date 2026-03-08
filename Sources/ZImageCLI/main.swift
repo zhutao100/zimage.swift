@@ -41,16 +41,16 @@ enum ZImageCLI {
 
     var prompt: String?
     var negativePrompt: String?
-    var width = ZImageModelMetadata.recommendedWidth
-    var height = ZImageModelMetadata.recommendedHeight
-    var steps = ZImageModelMetadata.recommendedInferenceSteps
-    var guidance = ZImageModelMetadata.recommendedGuidanceScale
+    var width: Int?
+    var height: Int?
+    var steps: Int?
+    var guidance: Float?
     var seed: UInt64?
     var outputPath = "z-image.png"
     var model: String?
     var weightsVariant: String?
     var cacheLimit: Int?
-    var maxSequenceLength = 512
+    var maxSequenceLength: Int?
     var loraPath: String?
     var loraScale: Float = 1.0
     var enhancePrompt = false
@@ -68,13 +68,13 @@ enum ZImageCLI {
       case "--negative-prompt", "--np":
         negativePrompt = nextValue(for: arg, iterator: &iterator)
       case "--width", "-W":
-        width = intValue(for: arg, iterator: &iterator, minimum: 64, fallback: width)
+        width = optionalIntValue(for: arg, iterator: &iterator, minimum: 64) ?? width
       case "--height", "-H":
-        height = intValue(for: arg, iterator: &iterator, minimum: 64, fallback: height)
+        height = optionalIntValue(for: arg, iterator: &iterator, minimum: 64) ?? height
       case "--steps", "-s":
-        steps = intValue(for: arg, iterator: &iterator, minimum: 1, fallback: steps)
+        steps = optionalIntValue(for: arg, iterator: &iterator, minimum: 1) ?? steps
       case "--guidance", "-g":
-        guidance = floatValue(for: arg, iterator: &iterator, fallback: guidance)
+        guidance = optionalFloatValue(for: arg, iterator: &iterator) ?? guidance
       case "--seed":
         seed = UInt64(nextValue(for: arg, iterator: &iterator))
       case "--output", "-o":
@@ -88,7 +88,7 @@ enum ZImageCLI {
       case "--cache-limit":
         cacheLimit = intValue(for: arg, iterator: &iterator, minimum: 1, fallback: 2048)
       case "--max-sequence-length":
-        maxSequenceLength = intValue(for: arg, iterator: &iterator, minimum: 64, fallback: 512)
+        maxSequenceLength = optionalIntValue(for: arg, iterator: &iterator, minimum: 64) ?? maxSequenceLength
       case "--lora", "-l":
         loraPath = nextValue(for: arg, iterator: &iterator)
       case "--lora-scale":
@@ -121,6 +121,16 @@ enum ZImageCLI {
       return
     }
 
+    let preset = ZImagePreset.resolved(
+      for: model,
+      width: width,
+      height: height,
+      steps: steps,
+      guidanceScale: guidance,
+      maxSequenceLength: maxSequenceLength
+    )
+    let resolvedNegativePrompt = negativePrompt ?? preset.negativePrompt
+
     if let limit = cacheLimit {
       Memory.cacheLimit = limit * 1024 * 1024
       logger.info("GPU cache limit set to \(limit)MB")
@@ -135,16 +145,16 @@ enum ZImageCLI {
 
     let request = ZImageGenerationRequest(
       prompt: prompt,
-      negativePrompt: negativePrompt,
-      width: width,
-      height: height,
-      steps: steps,
-      guidanceScale: guidance,
+      negativePrompt: resolvedNegativePrompt,
+      width: preset.width,
+      height: preset.height,
+      steps: preset.steps,
+      guidanceScale: preset.guidanceScale,
       seed: seed,
       outputPath: URL(fileURLWithPath: outputPath),
       model: model,
       weightsVariant: weightsVariant,
-      maxSequenceLength: maxSequenceLength,
+      maxSequenceLength: preset.maxSequenceLength,
       lora: loraConfig,
       enhancePrompt: enhancePrompt,
       enhanceMaxTokens: enhanceMaxTokens,
@@ -154,7 +164,7 @@ enum ZImageCLI {
     let pipeline = ZImagePipeline(logger: logger)
     let semaphore = DispatchSemaphore(value: 0)
     let useBar = !noProgress && (isatty(STDERR_FILENO) != 0)
-    let bar = useBar ? ProgressBar(total: steps) : nil
+    let bar = useBar ? ProgressBar(total: preset.steps) : nil
     Task {
       do {
         _ = try await pipeline.generate(
@@ -186,15 +196,15 @@ enum ZImageCLI {
   private static func printUsage() {
     print(
       """
-      Z-Image-Turbo Swift port
+      Z-Image Swift CLI
 
       Usage: ZImageCLI --prompt "text" [options]
         --prompt, -p           Text prompt (required)
         --negative-prompt      Negative prompt
         --width, -W            Output width (default \(ZImageModelMetadata.recommendedWidth))
         --height, -H           Output height (default \(ZImageModelMetadata.recommendedHeight))
-        --steps, -s            Inference steps (default \(ZImageModelMetadata.recommendedInferenceSteps))
-        --guidance, -g         Guidance scale (default \(ZImageModelMetadata.recommendedGuidanceScale))
+        --steps, -s            Inference steps (default: model-aware, 9 for Turbo / 50 for Base)
+        --guidance, -g         Guidance scale (default: model-aware, 0.0 for Turbo / 4.0 for Base)
         --seed                 Random seed
         --output, -o           Output path (default z-image.png)
         --model, -m            Model path or HuggingFace ID (default: \(ZImageRepository.id))
@@ -208,6 +218,8 @@ enum ZImageCLI {
         --enhance-max-tokens   Max tokens for prompt enhancement (default: 512)
         --no-progress          Disable progress output
         --help, -h             Show help
+
+      Known Tongyi-MAI ids apply model-aware presets. Local paths and unknown ids keep the Turbo-compatible preset unless you override the sampling flags.
 
       Subcommands:
         quantize               Quantize model weights
@@ -235,6 +247,7 @@ enum ZImageCLI {
         ZImageCLI -p "a cute cat" -o cat.png
         ZImageCLI -p "a sunset" -m models/z-image-turbo-q8
         ZImageCLI -p "a forest" -m Tongyi-MAI/Z-Image-Turbo
+        ZImageCLI -p "a black tiger in a bamboo forest" -m Tongyi-MAI/Z-Image
         ZImageCLI -p "a cut a cat" --lora ostris/z_image_turbo_childrens_drawings
         ZImageCLI -p "cat" --enhance  # Enhanced prompt generation
       """)
@@ -472,16 +485,16 @@ enum ZImageCLI {
     var controlScale: Float = 0.75
     var controlnetWeights: String?
     var controlnetWeightsFile: String?
-    var width = ZImageModelMetadata.recommendedWidth
-    var height = ZImageModelMetadata.recommendedHeight
-    var steps = ZImageModelMetadata.recommendedInferenceSteps
-    var guidance = ZImageModelMetadata.recommendedGuidanceScale
+    var width: Int?
+    var height: Int?
+    var steps: Int?
+    var guidance: Float?
     var seed: UInt64?
     var outputPath = "z-image-control.png"
     var model: String?
     var weightsVariant: String?
     var cacheLimit: Int?
-    var maxSequenceLength = 512
+    var maxSequenceLength: Int?
     var noProgress = false
     var logControlMemory = false
 
@@ -505,13 +518,13 @@ enum ZImageCLI {
       case "--control-file", "--cf":
         controlnetWeightsFile = nextValue(for: arg, iterator: &iterator)
       case "--width", "-W":
-        width = intValue(for: arg, iterator: &iterator, minimum: 64, fallback: width)
+        width = optionalIntValue(for: arg, iterator: &iterator, minimum: 64) ?? width
       case "--height", "-H":
-        height = intValue(for: arg, iterator: &iterator, minimum: 64, fallback: height)
+        height = optionalIntValue(for: arg, iterator: &iterator, minimum: 64) ?? height
       case "--steps", "-s":
-        steps = intValue(for: arg, iterator: &iterator, minimum: 1, fallback: steps)
+        steps = optionalIntValue(for: arg, iterator: &iterator, minimum: 1) ?? steps
       case "--guidance", "-g":
-        guidance = floatValue(for: arg, iterator: &iterator, fallback: guidance)
+        guidance = optionalFloatValue(for: arg, iterator: &iterator) ?? guidance
       case "--seed":
         seed = UInt64(nextValue(for: arg, iterator: &iterator))
       case "--output", "-o":
@@ -523,7 +536,7 @@ enum ZImageCLI {
       case "--cache-limit":
         cacheLimit = intValue(for: arg, iterator: &iterator, minimum: 1, fallback: 2048)
       case "--max-sequence-length":
-        maxSequenceLength = intValue(for: arg, iterator: &iterator, minimum: 64, fallback: 512)
+        maxSequenceLength = optionalIntValue(for: arg, iterator: &iterator, minimum: 64) ?? maxSequenceLength
       case "--log-control-memory":
         logControlMemory = true
       case "--no-progress":
@@ -552,6 +565,17 @@ enum ZImageCLI {
       printControlUsage()
       return
     }
+
+    let preset = ZImagePreset.resolved(
+      for: model,
+      width: width,
+      height: height,
+      steps: steps,
+      guidanceScale: guidance,
+      maxSequenceLength: maxSequenceLength
+    )
+    let resolvedNegativePrompt = negativePrompt ?? preset.negativePrompt
+
     var controlImageURL: URL? = nil
     if let controlImage {
       controlImageURL = URL(fileURLWithPath: controlImage)
@@ -583,7 +607,7 @@ enum ZImageCLI {
     }
 
     let useBar = !noProgress && (isatty(STDERR_FILENO) != 0)
-    let bar = useBar ? ProgressBar(total: steps) : nil
+    let bar = useBar ? ProgressBar(total: preset.steps) : nil
     let barBox = Box<ProgressBar?>(bar)
     let disableProgress = noProgress
     let progressCallback: ControlProgressCallback?
@@ -606,22 +630,22 @@ enum ZImageCLI {
 
     let request = ZImageControlGenerationRequest(
       prompt: prompt,
-      negativePrompt: negativePrompt,
+      negativePrompt: resolvedNegativePrompt,
       controlImage: controlImageURL,
       inpaintImage: inpaintImageURL,
       maskImage: maskImageURL,
       controlContextScale: controlScale,
-      width: width,
-      height: height,
-      steps: steps,
-      guidanceScale: guidance,
+      width: preset.width,
+      height: preset.height,
+      steps: preset.steps,
+      guidanceScale: preset.guidanceScale,
       seed: seed,
       outputPath: URL(fileURLWithPath: outputPath),
       model: model,
       weightsVariant: weightsVariant,
       controlnetWeights: controlnetWeights,
       controlnetWeightsFile: controlnetWeightsFile,
-      maxSequenceLength: maxSequenceLength,
+      maxSequenceLength: preset.maxSequenceLength,
       progressCallback: progressCallback,
       runtimeOptions: .init(logPhaseMemory: logControlMemory)
     )
@@ -659,8 +683,8 @@ enum ZImageCLI {
         --control-file, --cf      Specific safetensors filename within repo (e.g., "Z-Image-Turbo-Fun-Controlnet-Union-2.1-2602-8steps.safetensors")
         --width, -W               Output width (default \(ZImageModelMetadata.recommendedWidth))
         --height, -H              Output height (default \(ZImageModelMetadata.recommendedHeight))
-        --steps, -s               Inference steps (default \(ZImageModelMetadata.recommendedInferenceSteps), increase for higher control scale)
-        --guidance, -g            Guidance scale (default \(ZImageModelMetadata.recommendedGuidanceScale))
+        --steps, -s               Inference steps (default: model-aware, 9 for Turbo / 50 for Base)
+        --guidance, -g            Guidance scale (default: model-aware, 0.0 for Turbo / 4.0 for Base)
         --seed                    Random seed
         --output, -o              Output path (default z-image-control.png)
         --model, -m               Model path or HuggingFace ID (default: \(ZImageRepository.id))
@@ -672,6 +696,7 @@ enum ZImageCLI {
         --help, -h                Show help
 
       Note: At least one of --control-image, --inpaint-image, or --mask must be provided.
+      Known Tongyi-MAI ids apply model-aware presets. Local paths and unknown ids keep the Turbo-compatible preset unless you override the sampling flags.
 
       Control Types:
         The control image should be pre-processed according to the control type:
@@ -717,9 +742,22 @@ enum ZImageCLI {
     return max(minimum, value)
   }
 
+  private static func optionalIntValue(
+    for arg: String,
+    iterator: inout IndexingIterator<[String]>,
+    minimum: Int
+  ) -> Int? {
+    guard let value = Int(nextValue(for: arg, iterator: &iterator)) else { return nil }
+    return max(minimum, value)
+  }
+
   private static func floatValue(for arg: String, iterator: inout IndexingIterator<[String]>, fallback: Float) -> Float
   {
     Float(nextValue(for: arg, iterator: &iterator)) ?? fallback
+  }
+
+  private static func optionalFloatValue(for arg: String, iterator: inout IndexingIterator<[String]>) -> Float? {
+    Float(nextValue(for: arg, iterator: &iterator))
   }
 }
 
