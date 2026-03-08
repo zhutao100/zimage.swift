@@ -773,60 +773,15 @@ public class ZImageControlPipeline {
       } else {
         logger.info("Reusing cached tokenizer")
       }
-      logger.info("Loading transformer...")
-      let transformer = try loadTransformer(snapshot: snapshot, config: modelConfigs.transformer)
-      let transformerWeights = try weightsMapper.loadTransformer()
-      ZImageWeightsMapping.applyTransformer(
-        weights: transformerWeights,
-        to: transformer,
-        manifest: quantManifest,
-        logger: logger
-      )
-      self.transformer = transformer
+      self.transformer = nil
       self.controlnet = nil
       loadedModelId = requestedModelId
       loadedWeightsVariant = requestedWeightsVariant
       loadedControlnetWeightsId = nil
-    } else if transformer == nil {
-      logger.info("Reloading transformer (cache preserved)...")
-      guard let snapshot = self.snapshot,
-        let modelConfigs = self.modelConfigs
-      else {
-        throw PipelineError.transformerNotLoaded
-      }
-      let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
-      logger.info("Loading transformer...")
-      let transformer = try loadTransformer(snapshot: snapshot, config: modelConfigs.transformer)
-      let transformerWeights = try weightsMapper.loadTransformer()
-      ZImageWeightsMapping.applyTransformer(
-        weights: transformerWeights,
-        to: transformer,
-        manifest: quantManifest,
-        logger: logger
-      )
-      self.transformer = transformer
-      self.controlnet = nil
-      loadedControlnetWeightsId = nil
     } else {
       logger.info("Reusing cached model \(requestedModelId)")
     }
-    if let controlnetSpec = requestedControlnetId {
-      if needsControlnetReload || needsModelReload || controlnet == nil {
-        guard let transformer, let modelConfigs else {
-          throw PipelineError.transformerNotLoaded
-        }
-        logger.info("Loading controlnet weights from \(controlnetSpec)...")
-        controlnet = try await loadAppliedControlnet(
-          transformer: transformer,
-          transformerConfig: modelConfigs.transformer,
-          controlnetSpec: controlnetSpec,
-          preferredFile: request.controlnetWeightsFile,
-          progressCallback: request.progressCallback
-        )
-      } else {
-        logger.info("Reusing cached controlnet weights")
-      }
-    } else if controlnet != nil || loadedControlnetWeightsId != nil {
+    if requestedControlnetId == nil, controlnet != nil || loadedControlnetWeightsId != nil {
       unloadControlnet()
     }
     guard let snapshot,
@@ -1022,7 +977,7 @@ public class ZImageControlPipeline {
     )
     let timestepsArray = scheduler.timesteps.asArray(Float.self)
     if transformer == nil {
-      logger.info("Reloading transformer after prompt encoding...")
+      logger.info("Loading transformer for denoising...")
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
       let transformerModel = try loadTransformer(snapshot: snapshot, config: modelConfigs.transformer)
       let transformerWeights = try weightsMapper.loadTransformer()
@@ -1036,7 +991,7 @@ public class ZImageControlPipeline {
       controlnet = nil
       loadedControlnetWeightsId = nil
       if let controlnetSpec = request.controlnetWeights {
-        logger.info("Reloading controlnet weights...")
+        logger.info("Loading controlnet weights for denoising from \(controlnetSpec)...")
         controlnet = try await loadAppliedControlnet(
           transformer: transformerModel,
           transformerConfig: modelConfigs.transformer,

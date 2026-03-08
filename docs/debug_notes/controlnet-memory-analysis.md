@@ -48,30 +48,23 @@ The encoder-only VAE split reduced residency pressure, but it did not change the
 
 There is still no tiled or striped control-image VAE encode path in the current Swift repo.
 
-### 3. The control pipeline still pays unnecessary load and reload churn, but ControlNet deferral is not yet quality-safe
+### 3. The early transformer and ControlNet load churn is now fixed, but the denoising load boundary still dominates
 
-The current lifecycle is leaner than the original implementation, but it still does this:
+The March 8, 2026 phase 1 follow-up work changed the control lifecycle to this:
 
-1. load tokenizer, transformer, and optional ControlNet weights
+1. load tokenizer only
 2. load text encoder and build prompt embeddings
-3. unload transformer and ControlNet before `buildControlContext(...)`
-4. build control context
-5. reload transformer and optional ControlNet before denoising
+3. build control context without transformer or ControlNet residency
+4. load transformer and optional ControlNet right before denoising
 
-So the old "full `AutoencoderKL` is loaded too early" claim is obsolete, but the more general load-order problem is still present:
+That means the old early-load complaint is no longer current.
+The remaining practical issue is narrower:
 
-- transformer and ControlNet are still loaded before prompt encoding even though they are not needed there
-- transformer and ControlNet are still reloaded after control-context construction
+- the deferred denoising load boundary still climbs back to about `29.5 GiB` resident before the first denoising step
+- peak memory footprint stays around `59.3 GiB` even after the prompt-stage baseline drops sharply
 
-This remains the most plausible remaining source of avoidable baseline pressure and latency churn outside the VAE encode itself.
-
-March 8, 2026 follow-up:
-
-- deferring both transformer and ControlNet reduced prompt-stage residency sharply but changed the fixed-seed output
-- deferring only ControlNet reproduced the same output drift while leaving peak memory footprint effectively unchanged
-
-That means the pipeline is still lifecycle-sensitive around ControlNet loading.
-The open task is no longer "just defer ControlNet", but "explain why ControlNet deferral changes output, then revisit deferral only if that root cause is removed."
+So the remaining question is not whether eager loading can be removed. It can, and it was.
+The remaining question is whether the denoising load boundary itself can be reduced or attributed more precisely.
 
 ### 4. Diffusers parity is still about math, not lifecycle
 
@@ -97,6 +90,7 @@ The original version of this note also recommended several changes that are now 
 - post-build cache barrier after control-context materialization
 - full-lifecycle `AutoencoderKL` residency in the control pipeline
 - repeated `MLX.stacked(allC, axis: 0)` hint transport inside the control transformer blocks
+- eager transformer and ControlNet loading before prompt and control-context work
 
 Those are now part of the current repo state and the measured remediation history.
 
@@ -106,10 +100,8 @@ After phase 3, the measured high-resolution reference run still peaks around `59
 
 The remaining practical questions are:
 
-- why deferring ControlNet loading changes the fixed-seed output even when the control math and weights are otherwise unchanged
-- how much prompt-stage baseline reduction remains available once that lifecycle sensitivity is understood
-
-Only after that is understood does it make sense to revisit deferred loading.
-If deferred loading remains blocked, tiled control and inpaint VAE encode should be judged against the measured peak-memory target rather than treated as an automatic next step.
+- how much of the remaining `~29.5 GiB` denoising-start residency is unavoidable model residency versus lifecycle overhead
+- whether tighter telemetry can isolate the residual jump cleanly enough to justify any further loader surgery
+- whether tiled control and inpaint VAE encode is worth attempting once it is clear that it will not move the denoising-boundary peak by itself
 
 The follow-up execution plan lives in `docs/dev_plans/controlnet-memory-followup.md`.

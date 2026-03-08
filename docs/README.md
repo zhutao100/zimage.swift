@@ -28,7 +28,7 @@ If you’re new here, start with the root `README.md` for a runnable quickstart.
 - [`docs/debug_notes/control-context-memory-remediation.md`](debug_notes/control-context-memory-remediation.md) — validated current-state diagnosis for the control-path memory issue, including the March 7, 2026 high-resolution probe.
 - [`docs/debug_notes/controlnet-memory-analysis.md`](debug_notes/controlnet-memory-analysis.md) — pruned ControlNet-specific follow-up analysis that keeps only the post-remediation findings still true in the current repo state.
 - [`docs/dev_plans/control-context-memory-remediation.md`](dev_plans/control-context-memory-remediation.md) — completed remediation plan and measurement log for phases 1 through 3.
-- [`docs/dev_plans/controlnet-memory-followup.md`](dev_plans/controlnet-memory-followup.md) — active follow-up plan, including the rejected March 8, 2026 deferred-ControlNet phase and the remaining telemetry work.
+- [`docs/dev_plans/controlnet-memory-followup.md`](dev_plans/controlnet-memory-followup.md) — active follow-up plan, including the completed March 8, 2026 deferred denoiser-load phase and the remaining telemetry work.
 - [`docs/context/zimage_runtime_precision_parity_report.md`](context/zimage_runtime_precision_parity_report.md) — confirmed parity, confirmed mismatches, and runtime hypotheses for Swift vs Diffusers precision handling.
 - [`docs/dev_plans/runtime_precision_parity_improvement_plan.md`](dev_plans/runtime_precision_parity_improvement_plan.md) — measured execution plan for the first runtime precision parity fixes.
 - [`docs/context/mlx_pytorch_bf16_inference_dtype_deep_dive.md`](context/mlx_pytorch_bf16_inference_dtype_deep_dive.md) — backend-level BF16 behavior notes for MLX and PyTorch/MPS.

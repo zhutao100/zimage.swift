@@ -2,17 +2,24 @@
 
 This plan turns the still-open findings in `docs/debug_notes/controlnet-memory-analysis.md` into a measured next sequence after the completed March 7, 2026 remediation work.
 
-Execution status: phase 1 rejected on March 8, 2026; phase 2 remains open.
+Execution status: phase 1 completed on March 8, 2026; phase 2 remains open.
 
 ## Goal
 
 Reduce the remaining control-path peak memory pressure without changing control-image semantics or fixed-seed output quality.
 
-Current measured reference state from phase 3:
+Current measured comparison baseline for this follow-up pass:
 
-- `/usr/bin/time -l` maximum resident set size: `42,656,612,352` bytes
-- `/usr/bin/time -l` peak memory footprint: `59,328,863,512` bytes
-- fixed-seed output SHA-256: `2afd1fa9ba4398ad2b8b53510f44d602d5d7d5cc2631cee99d35c6d0752f8f70`
+- source: March 8, 2026 rerun of commit `555fec6`
+- `/usr/bin/time -l` maximum resident set size: `42,644,701,184` bytes
+- `/usr/bin/time -l` peak memory footprint: `59,326,700,800` bytes
+- fixed-seed output SHA-256: `b5f1585314323c7e12f3a4871644346ac9d5f2470cfbf74c11935e9f2c558b98`
+
+Historical note:
+
+- the March 7, 2026 remediation log recorded the saved quality artifact hash `2afd1fa9...`
+- current reruns of commit `555fec6` on March 8, 2026 reproduce `b5f15853...`
+- this follow-up plan uses the March 8 rerun as the acceptance baseline for any new phase
 
 ## Scope
 
@@ -101,7 +108,7 @@ Acceptance bar:
 
 ## Phase 1: Defer Transformer And ControlNet Loading
 
-Status: rejected on March 8, 2026
+Status: completed on March 8, 2026
 
 Objective:
 
@@ -128,18 +135,17 @@ Acceptance criteria:
 
 Execution result:
 
-- Attempt A deferred both transformer and ControlNet until denoising.
-- Attempt B kept the original transformer lifecycle and deferred only ControlNet.
-- Both attempts changed the fixed-seed output from phase 3 SHA-256 `2afd1fa9ba4398ad2b8b53510f44d602d5d7d5cc2631cee99d35c6d0752f8f70` to `b5f1585314323c7e12f3a4871644346ac9d5f2470cfbf74c11935e9f2c558b98`.
-- The resulting drift versus the saved phase 3 image was not trivial:
-  - MAE: `20.8288`
-  - max absolute pixel delta: `197`
-  - PSNR: `18.2115 dB`
-- Attempt B still improved prompt-stage residency versus phase 3:
-  - `prompt-embeddings.after-clear-cache`: `33.81 GiB -> 29.48 GiB`
-  - `maximum resident set size`: `42,656,612,352 -> 38,369,869,824`
-  - `peak memory footprint`: `59,328,863,512 -> 59,325,996,240`
-- The quality regression failed the acceptance bar, so the deferred-loading implementation was not landed.
+- the final landed variant defers both transformer and ControlNet loading until denoising
+- versus the March 8 rerun baseline:
+  - `prompt-embeddings.after-clear-cache`: `35.18 GiB -> 6.26 GiB`
+  - `/usr/bin/time -l` maximum resident set size: `42,644,701,184 -> 38,382,632,960`
+  - `/usr/bin/time -l` peak memory footprint: `59,326,700,800 -> 59,324,947,664`
+- the fixed-seed output stayed bit-identical to the March 8 rerun baseline:
+  - phase 1 SHA-256: `b5f1585314323c7e12f3a4871644346ac9d5f2470cfbf74c11935e9f2c558b98`
+  - phase 1 vs baseline MAE: `0.0000`
+  - phase 1 vs baseline max absolute pixel delta: `0`
+  - phase 1 vs baseline PSNR: `inf`
+- the large prompt-stage and RSS drop justified landing the phase even though peak memory footprint stayed effectively flat
 
 ## Phase 2: Consolidate Lifecycle Boundaries And Telemetry
 
@@ -196,26 +202,34 @@ Acceptance criteria:
 
 ## Execution Log
 
-- Phase 1: attempted on March 8, 2026 and rejected.
-  - Attempt A, defer transformer and ControlNet:
-    - `prompt-embeddings.after-clear-cache`: resident `6.73 GiB`, active `2.50 MiB`, cache `0 B`
-    - `control-context.after-baseline-reduction`: resident `2.61 GiB`, active `67.87 MiB`, cache `0 B`
-    - `control-context.after-clear-cache`: resident `318.80 MiB`, active `71.36 MiB`, cache `0 B`
+- Baseline rerun: completed on March 8, 2026 from commit `555fec6`.
+  - `prompt-embeddings.after-clear-cache`: resident `35.18 GiB`, active `29.18 GiB`, cache `0 B`
+  - `control-context.after-baseline-reduction`: resident `997.77 MiB`, active `67.87 MiB`, cache `0 B`
+  - `control-context.after-clear-cache`: resident `308.45 MiB`, active `71.36 MiB`, cache `0 B`
+  - `denoising.before-start`: resident `29.48 GiB`, active `29.19 GiB`, cache `65.30 MiB`
+  - `decode.after-eval`: resident `408.55 MiB`, active `127.48 MiB`, cache `39.00 GiB`, MLX peak `37.02 GiB`
+  - `/usr/bin/time -l` maximum resident set size: `42,644,701,184` bytes
+  - `/usr/bin/time -l` peak memory footprint: `59,326,700,800` bytes
+  - output SHA-256: `b5f1585314323c7e12f3a4871644346ac9d5f2470cfbf74c11935e9f2c558b98`
+- Phase 1: completed on March 8, 2026.
+  - Scope landed:
+    - defer transformer loading until prompt embeddings and control-context construction are complete
+    - defer ControlNet loading until the denoising boundary
+    - keep tokenizer, text encoder, VAE encoder, and final decoder lifecycles unchanged
+  - Phase 1 high-resolution memory probe:
+    - `prompt-embeddings.after-clear-cache`: resident `6.26 GiB`, active `2.50 MiB`, cache `0 B`
+    - `control-context.after-baseline-reduction`: resident `1006.81 MiB`, active `67.87 MiB`, cache `0 B`
+    - `control-context.after-clear-cache`: resident `317.66 MiB`, active `71.36 MiB`, cache `0 B`
     - `denoising.before-start`: resident `29.50 GiB`, active `29.19 GiB`, cache `65.30 MiB`
-    - `decode.after-eval`: resident `417.31 MiB`, active `127.48 MiB`, cache `39.00 GiB`, MLX peak `32.67 GiB`
-    - `/usr/bin/time -l` maximum resident set size: `38,384,238,592` bytes
-    - `/usr/bin/time -l` peak memory footprint: `59,325,389,960` bytes
+    - `decode.after-eval`: resident `417.75 MiB`, active `127.48 MiB`, cache `39.00 GiB`, MLX peak `32.67 GiB`
+    - `/usr/bin/time -l` maximum resident set size: `38,382,632,960` bytes
+    - `/usr/bin/time -l` peak memory footprint: `59,324,947,664` bytes
+  - Phase 1 fixed-seed quality probe:
     - output SHA-256: `b5f1585314323c7e12f3a4871644346ac9d5f2470cfbf74c11935e9f2c558b98`
-  - Attempt B, defer ControlNet only:
-    - `prompt-embeddings.after-clear-cache`: resident `29.48 GiB`, active `22.93 GiB`, cache `0 B`
-    - `control-context.after-baseline-reduction`: resident `269.34 MiB`, active `67.87 MiB`, cache `0 B`
-    - `control-context.after-clear-cache`: resident `321.64 MiB`, active `71.36 MiB`, cache `0 B`
-    - `denoising.before-start`: resident `29.48 GiB`, active `29.19 GiB`, cache `65.30 MiB`
-    - `decode.after-eval`: resident `418.94 MiB`, active `127.48 MiB`, cache `39.00 GiB`, MLX peak `32.67 GiB`
-    - `/usr/bin/time -l` maximum resident set size: `38,369,869,824` bytes
-    - `/usr/bin/time -l` peak memory footprint: `59,325,996,240` bytes
-    - output SHA-256: `b5f1585314323c7e12f3a4871644346ac9d5f2470cfbf74c11935e9f2c558b98`
+    - phase 1 vs baseline MAE: `0.0000`
+    - phase 1 vs baseline max absolute pixel delta: `0`
+    - phase 1 vs baseline PSNR: `inf`
   - Assessment:
-    - the prompt-stage baseline does improve when ControlNet is deferred
-    - the output drift is identical across both variants, which localizes the regression to ControlNet deferral rather than transformer deferral
-    - peak memory footprint stays effectively flat, so there is no reason to accept the quality regression
+    - the prompt-stage baseline collapsed by roughly `28.92 GiB`
+    - maximum RSS improved by about `4.26 GiB`
+    - peak memory footprint stayed effectively flat, so the remaining issue moved cleanly to the denoising load boundary rather than disappearing
