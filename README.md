@@ -1,6 +1,8 @@
 # Z-Image.swift
 
-Native Swift + MLX implementation of the `Tongyi-MAI/Z-Image` family for Apple Silicon.
+> An enhanced fork of the `mzbac/zimage.swift` project.
+
+Native Swift + MLX implementation of the `Tongyi-MAI/Z-Image` and `Tongyi-MAI/Z-Image-Turbo` model family for Apple Silicon.
 
 The repo ships two products:
 
@@ -12,11 +14,45 @@ The repo ships two products:
 - Text-to-image generation with the Z-Image diffusion transformer and Flow Match scheduler
 - ControlNet conditioning and inpainting via `ZImageCLI control`
 - LoRA and LoKr adapters on the text-to-image CLI and in the library pipelines
-- 4-bit and 8-bit quantization for base-model and ControlNet weights
+- 4-bit and 8-bit quantization for the Turbo model and ControlNet weights
 - Hugging Face snapshots, local Diffusers-style model folders, local AIO `.safetensors`, and transformer-only overrides
 - Optional prompt enhancement on the text-to-image CLI via the Qwen text encoder's generation path
 
 The default CLI model is `Tongyi-MAI/Z-Image-Turbo`.
+
+## Examples
+
+### Text To Image Examples
+
+> Z-Image-Turbo
+
+| Prompt | Output |
+|--------|--------|
+| A dramatic, cinematic japanese-action scene in a edo era Kyoto city. A woman named Harley Quinn from the movie "Birds of Prey" in colorful, punk-inspired comic-villain attire walks confidently while holding the arm of a serious-looking man named John Wick played by Keanu Reeves from the fantastic film John Wick 2 in a black suit, her t-shirt says "Birds of Prey", the characters are capture in a postcard held by a hand in front of a beautiful realistic city at sunset and there is cursive writing that says "Z-Image-Turbo, Now in MLX" | ![Output](examples/z-image-turbo.png) |
+
+
+> Z-Image (Base)
+
+| Prompt | Output |
+|--------|--------|
+| A dramatic, cinematic japanese-action scene in a edo era Kyoto city. A woman named Harley Quinn from the movie "Birds of Prey" in colorful, punk-inspired comic-villain attire walks confidently while holding the arm of a serious-looking man named John Wick played by Keanu Reeves from the fantastic film John Wick 2 in a black suit, her t-shirt says "Birds of Prey", the characters are capture in a postcard held by a hand in front of a beautiful realistic city at sunset and there is cursive writing that says "Z-Image, Now in MLX" | ![Output](examples/z-image.png) |
+
+Note:
+- generated with `--negative-prompt "卡通,油画质感,低分辨率,塑料材质,光滑"`
+
+### ControlNet Examples (Z-Image-Turbo)
+
+| Control Type | Prompt | Control Image | Output |
+|--------------|--------|---------------|--------|
+| Canny | A hyper-realistic close-up portrait of a leopard face hiding behind dense green jungle leaves, camouflaged, direct eye contact, intricate fur detail, bright yellow eyes, cinematic lighting, soft shadows, National Geographic photography, 8k, sharp focus, depth of field | ![Canny](images/canny.jpg) | ![Canny Output](examples/canny.png) |
+| HED | A photorealistic film still of a man in a dark shirt sitting at a dining table in a modern kitchen at night, looking down at a bowl of soup. A glass bottle and a glass of white wine are in the foreground. Warm, low, cinematic lighting, soft shadows, shallow depth of field, contemplative atmosphere, highly detailed. | ![HED](images/hed.jpg) | ![HED Output](examples/hed.png) |
+| Depth | A hyperrealistic architectural photograph of a spacious, minimalist modern hallway interior. Large floor-to-ceiling windows on the right wall fill the space with bright natural daylight. A light gray sectional sofa and a low, modern coffee table are placed in the foreground on a light wood floor. A large potted plant is visible further down the hallway. Besides the plant, the hallway extends into the darkness, suggesting further space. White walls, clean lines, serene atmosphere, highly detailed, 8k resolution, cinematic lighting | ![Depth](images/depth.jpg) | ![Depth Output](examples/depth.png) |
+| Pose | 一位年轻女子站在阳光明媚的海岸线上，白裙在轻拂的海风中微微飘动。她拥有一头鲜艳的紫色长发，在风中轻盈舞动... | ![Pose](images/pose.jpg) | ![Pose Output](examples/pose.png) |
+
+Note:
+- generated with `--negative-prompt "卡通,油画质感,低分辨率,塑料材质,光滑"` and `--control-scale 0.75`
+- ControlNet weights: `alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1`
+- Control file: `Z-Image-Turbo-Fun-Controlnet-Union-2.1-2602-8steps.safetensors`
 
 ## Quickstart
 
@@ -120,9 +156,11 @@ For repo-side regression checking against the real Base checkpoint, use the opt-
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): build, test, lint, CI, and validation workflows
 - [docs/dev_plans/ROADMAP.md](docs/dev_plans/ROADMAP.md): prioritized next steps
 
-## Next Steps
+## Acknowledgements
 
-The current roadmap is kept in [docs/dev_plans/ROADMAP.md](docs/dev_plans/ROADMAP.md).
+- The original `mzbac/zimage.swift` repo for the initial implementation and reference point
+- The `Tongyi-MAI/Z-Image` and `Tongyi-MAI/Z-Image-Turbo` teams for the models, weights, and reference outputs that made this possible
+- The MLX team for the Swift bindings and MLX improvements that enabled the implementation and optimizations in this repo.
 
 ## License
 
