@@ -40,6 +40,18 @@ The default CLI model is `Tongyi-MAI/Z-Image-Turbo`.
 Note:
 - generated with `--negative-prompt "卡通,油画质感,低分辨率,塑料材质,光滑"`
 
+
+### LoRA/LoKr Examples (Z-Image-Turbo)
+
+#### LoKr adapter `F16/z-image-turbo-flow-dpo`
+
+| Prompt | Output |
+|--------|--------|
+| A dramatic, cinematic japanese-action scene in a edo era Kyoto city. A woman named Harley Quinn from the movie "Birds of Prey" in colorful, punk-inspired comic-villain attire walks confidently while holding the arm of a serious-looking man named John Wick played by Keanu Reeves from the fantastic film John Wick 2 in a black suit, her t-shirt says "Birds of Prey", the characters are capture in a postcard held by a hand in front of a beautiful realistic city at sunset and there is cursive writing that says "Z-Image-Turbo, Now in MLX" | ![Output](examples/z-image-turbo-lokr.png) |
+
+Note:
+- generated with `--negative-prompt "卡通,油画质感,低分辨率,毛绒材质,塑料材质,光滑"` and `--steps 9 --guidance 1.0`
+
 ### ControlNet Examples (Z-Image-Turbo)
 
 | Control Type | Prompt | Control Image | Output |
