@@ -60,6 +60,24 @@ public struct ZImageControlNetConfig {
     self.controlInDim = controlInDim
     self.addControlNoiseRefiner = addControlNoiseRefiner
   }
+
+  public init(transformerConfig: ZImageTransformerConfig) {
+    self.init(
+      inChannels: transformerConfig.inChannels,
+      dim: transformerConfig.dim,
+      nLayers: transformerConfig.nLayers,
+      nRefinerLayers: transformerConfig.nRefinerLayers,
+      nHeads: transformerConfig.nHeads,
+      nKVHeads: transformerConfig.nKVHeads,
+      normEps: transformerConfig.normEps,
+      qkNorm: transformerConfig.qkNorm,
+      capFeatDim: transformerConfig.capFeatDim,
+      ropeTheta: transformerConfig.ropeTheta,
+      tScale: transformerConfig.tScale,
+      axesDims: transformerConfig.axesDims,
+      axesLens: transformerConfig.axesLens
+    )
+  }
 }
 
 public typealias ZImageControlTransformerConfig = ZImageControlNetConfig

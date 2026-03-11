@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import MLX
 import MLXNN
 
@@ -29,6 +30,110 @@ public enum PipelineUtilities {
   }
 
   static let defaultTensorAbsMaxThreshold: Float = 10_000
+
+  struct StandardSnapshotContext {
+    let snapshot: URL
+    let configs: ZImageModelConfigs
+    let weightsMapper: ZImageWeightsMapper
+    let quantizationManifest: ZImageQuantizationManifest?
+    let weightsVariant: String?
+  }
+
+  static func makeTokenizer(from snapshot: URL) throws -> QwenTokenizer {
+    try QwenTokenizer.load(from: snapshot.appending(path: "tokenizer"))
+  }
+
+  static func makeTextEncoder(config: ZImageTextEncoderConfig) -> QwenTextEncoder {
+    QwenTextEncoder(
+      configuration: .init(
+        vocabSize: config.vocabSize,
+        hiddenSize: config.hiddenSize,
+        numHiddenLayers: config.numHiddenLayers,
+        numAttentionHeads: config.numAttentionHeads,
+        numKeyValueHeads: config.numKeyValueHeads,
+        intermediateSize: config.intermediateSize,
+        ropeTheta: config.ropeTheta,
+        maxPositionEmbeddings: config.maxPositionEmbeddings,
+        rmsNormEps: config.rmsNormEps,
+        headDim: config.headDim
+      )
+    )
+  }
+
+  static func makeTransformer(config: ZImageTransformerConfig) -> ZImageTransformer2DModel {
+    ZImageTransformer2DModel(configuration: config)
+  }
+
+  static func makeVAEConfiguration(from config: ZImageVAEConfig) -> VAEConfig {
+    .init(
+      inChannels: config.inChannels,
+      outChannels: config.outChannels,
+      latentChannels: config.latentChannels,
+      scalingFactor: config.scalingFactor,
+      shiftFactor: config.shiftFactor,
+      blockOutChannels: config.blockOutChannels,
+      layersPerBlock: config.layersPerBlock,
+      normNumGroups: config.normNumGroups,
+      sampleSize: config.sampleSize,
+      midBlockAddAttention: config.midBlockAddAttention
+    )
+  }
+
+  static func makeVAEEncoder(config: ZImageVAEConfig) -> AutoencoderEncoderOnly {
+    AutoencoderEncoderOnly(configuration: makeVAEConfiguration(from: config))
+  }
+
+  static func makeVAEDecoder(config: ZImageVAEConfig) -> AutoencoderDecoderOnly {
+    AutoencoderDecoderOnly(configuration: makeVAEConfiguration(from: config))
+  }
+
+  static func standardSnapshotValidator(weightsVariant: String?) -> (@Sendable (URL) -> Bool)? {
+    guard let weightsVariant = ZImageFiles.normalizedWeightsVariant(weightsVariant) else {
+      return nil
+    }
+
+    return { snapshot in
+      !ZImageFiles.resolveTransformerWeights(at: snapshot, weightsVariant: weightsVariant).isEmpty
+        && !ZImageFiles.resolveTextEncoderWeights(at: snapshot, weightsVariant: weightsVariant).isEmpty
+        && !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: weightsVariant).isEmpty
+    }
+  }
+
+  static func prepareStandardSnapshot(
+    model: String?,
+    weightsVariant: String?,
+    logger: Logger
+  ) async throws -> StandardSnapshotContext {
+    let normalizedWeightsVariant = ZImageFiles.normalizedWeightsVariant(weightsVariant)
+    let snapshot = try await PipelineSnapshot.prepare(
+      model: model,
+      weightsVariant: normalizedWeightsVariant,
+      snapshotValidator: standardSnapshotValidator(weightsVariant: normalizedWeightsVariant),
+      logger: logger
+    )
+    let configs = try ZImageModelConfigs.load(from: snapshot)
+    let weightsMapper = ZImageWeightsMapper(
+      snapshot: snapshot,
+      weightsVariant: normalizedWeightsVariant,
+      logger: logger
+    )
+    let quantizationManifest = weightsMapper.loadQuantizationManifest()
+    if quantizationManifest == nil {
+      try ZImageFiles.validateRequiredComponentWeights(
+        at: snapshot,
+        weightsVariant: normalizedWeightsVariant,
+        logger: logger
+      )
+    }
+
+    return StandardSnapshotContext(
+      snapshot: snapshot,
+      configs: configs,
+      weightsMapper: weightsMapper,
+      quantizationManifest: quantizationManifest,
+      weightsVariant: normalizedWeightsVariant
+    )
+  }
 
   public static func encodePrompt(
     _ prompt: String,
@@ -234,23 +339,13 @@ public enum PipelineUtilities {
     let normalizedWeightsVariant = ZImageFiles.normalizedWeightsVariant(weightsVariant)
     let patterns = PipelineSnapshot.modelFilePatterns(weightsVariant: normalizedWeightsVariant)
     let requireWeights = patterns.contains(where: { $0.localizedCaseInsensitiveContains("safetensors") })
-    let snapshotValidator: (@Sendable (URL) -> Bool)? =
-      if let normalizedWeightsVariant {
-        { snapshot in
-          !ZImageFiles.resolveTransformerWeights(at: snapshot, weightsVariant: normalizedWeightsVariant).isEmpty
-            && !ZImageFiles.resolveTextEncoderWeights(at: snapshot, weightsVariant: normalizedWeightsVariant).isEmpty
-            && !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: normalizedWeightsVariant).isEmpty
-        }
-      } else {
-        nil
-      }
     return try await ModelResolution.resolveOrDefault(
       modelSpec: model,
       defaultModelId: defaultModelId,
       defaultRevision: defaultRevision,
       filePatterns: patterns,
       requireWeights: requireWeights,
-      snapshotValidator: snapshotValidator,
+      snapshotValidator: standardSnapshotValidator(weightsVariant: normalizedWeightsVariant),
       progressHandler: progressHandler
     )
   }

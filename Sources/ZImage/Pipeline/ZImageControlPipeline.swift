@@ -225,75 +225,16 @@ public class ZImageControlPipeline {
     self.logger = logger
   }
 
-  private func loadTokenizer(snapshot: URL) throws -> QwenTokenizer {
-    let tokDir = snapshot.appending(path: "tokenizer")
-    return try QwenTokenizer.load(from: tokDir)
-  }
-
-  private func loadTextEncoder(snapshot _: URL, config: ZImageTextEncoderConfig) throws -> QwenTextEncoder {
-    QwenTextEncoder(
-      configuration: .init(
-        vocabSize: config.vocabSize,
-        hiddenSize: config.hiddenSize,
-        numHiddenLayers: config.numHiddenLayers,
-        numAttentionHeads: config.numAttentionHeads,
-        numKeyValueHeads: config.numKeyValueHeads,
-        intermediateSize: config.intermediateSize,
-        ropeTheta: config.ropeTheta,
-        maxPositionEmbeddings: config.maxPositionEmbeddings,
-        rmsNormEps: config.rmsNormEps,
-        headDim: config.headDim
-      )
-    )
-  }
-
   private func logControlMemory(_ phase: String, enabled: Bool) {
     guard enabled else { return }
     ControlMemoryTelemetry.logPhase(phase, logger: logger)
-  }
-
-  private func loadTransformer(snapshot _: URL, config: ZImageTransformerConfig) throws -> ZImageTransformer2DModel {
-    ZImageTransformer2DModel(configuration: config)
-  }
-
-  private func makeVAEConfiguration(from config: ZImageVAEConfig) -> VAEConfig {
-    .init(
-      inChannels: config.inChannels,
-      outChannels: config.outChannels,
-      latentChannels: config.latentChannels,
-      scalingFactor: config.scalingFactor,
-      shiftFactor: config.shiftFactor,
-      blockOutChannels: config.blockOutChannels,
-      layersPerBlock: config.layersPerBlock,
-      normNumGroups: config.normNumGroups,
-      sampleSize: config.sampleSize,
-      midBlockAddAttention: config.midBlockAddAttention
-    )
-  }
-
-  private func makeControlnetConfig(from config: ZImageTransformerConfig) -> ZImageControlNetConfig {
-    ZImageControlNetConfig(
-      inChannels: config.inChannels,
-      dim: config.dim,
-      nLayers: config.nLayers,
-      nRefinerLayers: config.nRefinerLayers,
-      nHeads: config.nHeads,
-      nKVHeads: config.nKVHeads,
-      normEps: config.normEps,
-      qkNorm: config.qkNorm,
-      capFeatDim: config.capFeatDim,
-      ropeTheta: config.ropeTheta,
-      tScale: config.tScale,
-      axesDims: config.axesDims,
-      axesLens: config.axesLens
-    )
   }
 
   private func loadControlnet(
     transformer: ZImageTransformer2DModel,
     config: ZImageTransformerConfig
   ) -> ZImageControlNetModel {
-    ZImageControlNetModel(configuration: makeControlnetConfig(from: config), sharedTransformer: transformer)
+    ZImageControlNetModel(configuration: .init(transformerConfig: config), sharedTransformer: transformer)
   }
 
   private func unloadControlnet() {
@@ -331,11 +272,11 @@ public class ZImageControlPipeline {
   }
 
   private func loadVAEEncoder(snapshot _: URL, config: ZImageVAEConfig) throws -> AutoencoderEncoderOnly {
-    AutoencoderEncoderOnly(configuration: makeVAEConfiguration(from: config))
+    PipelineUtilities.makeVAEEncoder(config: config)
   }
 
   private func loadVAEDecoder(snapshot _: URL, config: ZImageVAEConfig) throws -> AutoencoderDecoderOnly {
-    AutoencoderDecoderOnly(configuration: makeVAEConfiguration(from: config))
+    PipelineUtilities.makeVAEDecoder(config: config)
   }
 
   private func applyVAEWeights(to module: Module, snapshot: URL) throws {
@@ -704,7 +645,6 @@ public class ZImageControlPipeline {
     let requestedWeightsVariant = ZImageFiles.normalizedWeightsVariant(request.weightsVariant)
     let requestedControlnetId = request.controlnetWeights
     let needsModelReload = (loadedModelId != requestedModelId) || (loadedWeightsVariant != requestedWeightsVariant)
-    let needsControlnetReload = (loadedControlnetWeightsId != requestedControlnetId)
     if needsModelReload {
       let canPreserveSharedComponents =
         loadedModelId != nil
@@ -743,35 +683,14 @@ public class ZImageControlPipeline {
         Memory.clearCache()
       }
       logger.info("Loading model \(requestedModelId)...")
-      let snapshotValidator: (@Sendable (URL) -> Bool)? =
-        if let requestedWeightsVariant {
-          { [logger] snapshot in
-            !ZImageFiles.resolveTransformerWeights(
-              at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger
-            ).isEmpty
-              && !ZImageFiles.resolveTextEncoderWeights(
-                at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger
-              ).isEmpty
-              && !ZImageFiles.resolveVAEWeights(at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger)
-                .isEmpty
-          }
-        } else {
-          nil
-        }
-      let snapshot = try await PipelineSnapshot.prepare(
+      let snapshotContext = try await PipelineUtilities.prepareStandardSnapshot(
         model: request.model,
         weightsVariant: requestedWeightsVariant,
-        snapshotValidator: snapshotValidator,
         logger: logger
       )
-      let modelConfigs = try ZImageModelConfigs.load(from: snapshot)
-      let weightsMapper = ZImageWeightsMapper(
-        snapshot: snapshot, weightsVariant: requestedWeightsVariant, logger: logger)
-      let quantManifest = weightsMapper.loadQuantizationManifest()
-      if quantManifest == nil {
-        try ZImageFiles.validateRequiredComponentWeights(
-          at: snapshot, weightsVariant: requestedWeightsVariant, logger: logger)
-      }
+      let snapshot = snapshotContext.snapshot
+      let modelConfigs = snapshotContext.configs
+      let quantManifest = snapshotContext.quantizationManifest
       if let manifest = quantManifest {
         logger.info("Loading quantized model (bits=\(manifest.bits), group_size=\(manifest.groupSize))")
       }
@@ -780,7 +699,7 @@ public class ZImageControlPipeline {
       self.quantManifest = quantManifest
       if self.tokenizer == nil {
         logger.info("Loading tokenizer...")
-        self.tokenizer = try loadTokenizer(snapshot: snapshot)
+        self.tokenizer = try PipelineUtilities.makeTokenizer(from: snapshot)
       } else {
         logger.info("Reusing cached tokenizer")
       }
@@ -844,7 +763,7 @@ public class ZImageControlPipeline {
       var finalPrompt = request.prompt
       var enhancedPromptForCache: String? = nil
       do {
-        let textEncoder = try loadTextEncoder(snapshot: snapshot, config: modelConfigs.textEncoder)
+        let textEncoder = PipelineUtilities.makeTextEncoder(config: modelConfigs.textEncoder)
         let weightsMapper = ZImageWeightsMapper(
           snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
         let textEncoderWeights = try weightsMapper.loadTextEncoder()
@@ -998,7 +917,7 @@ public class ZImageControlPipeline {
     if transformer == nil {
       logger.info("Loading transformer for denoising...")
       let weightsMapper = ZImageWeightsMapper(snapshot: snapshot, weightsVariant: loadedWeightsVariant, logger: logger)
-      let transformerModel = try loadTransformer(snapshot: snapshot, config: modelConfigs.transformer)
+      let transformerModel = PipelineUtilities.makeTransformer(config: modelConfigs.transformer)
       let transformerWeights = try weightsMapper.loadTransformer()
       ZImageWeightsMapping.applyTransformer(
         weights: transformerWeights,
