@@ -133,6 +133,7 @@ final class WeightsVariantResolutionTests: XCTestCase {
           return
         }
         XCTAssertTrue(missingComponents.contains("vae"))
+        XCTAssertTrue(error.localizedDescription.contains("remove --weights-variant"))
       }
     }
   }

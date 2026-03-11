@@ -3,6 +3,7 @@ import HuggingFace
 
 public enum ModelResolutionError: Error, LocalizedError {
   case modelNotFound(String)
+  case localPathNotFound(String)
   case downloadFailed(String, Error)
   case networkUnavailable
   case authorizationRequired(String)
@@ -10,24 +11,40 @@ public enum ModelResolutionError: Error, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .modelNotFound(let spec):
-      return "Model not found: \(spec)"
+      return "Model '\(spec)' was not found. Verify the repo id or revision, or use a local model path."
+    case .localPathNotFound(let path):
+      return "Local model path not found: \(path)"
     case .downloadFailed(let modelId, let error):
       return "Failed to download '\(modelId)': \(error.localizedDescription)"
     case .networkUnavailable:
       return "No internet connection. Please check your network or use a local model path."
     case .authorizationRequired(let modelId):
-      return "Model '\(modelId)' not found or requires authentication"
+      return
+        "Access to model '\(modelId)' requires authentication or the repo is not visible. Set HF_TOKEN or use a local snapshot."
     }
   }
 }
 
 public enum ModelResolution {
+  static func expandedLocalPath(from modelSpec: String) -> String {
+    NSString(string: modelSpec).expandingTildeInPath
+  }
+
+  static func looksLikeLocalPath(_ modelSpec: String) -> Bool {
+    modelSpec.hasPrefix("/")
+      || modelSpec.hasPrefix("./")
+      || modelSpec.hasPrefix("../")
+      || modelSpec.hasPrefix("~")
+      || modelSpec.hasPrefix("file://")
+      || modelSpec.hasSuffix(".safetensors")
+  }
+
   public static func isHuggingFaceModelId(_ modelSpec: String) -> Bool {
-    if modelSpec.hasPrefix("/") || modelSpec.hasPrefix("./") || modelSpec.hasPrefix("../") {
+    if looksLikeLocalPath(modelSpec) {
       return false
     }
 
-    let url = URL(fileURLWithPath: modelSpec).standardizedFileURL
+    let url = URL(fileURLWithPath: expandedLocalPath(from: modelSpec)).standardizedFileURL
     if FileManager.default.fileExists(atPath: url.path) {
       return false
     }
@@ -69,9 +86,13 @@ public enum ModelResolution {
     snapshotValidator: (@Sendable (URL) -> Bool)? = nil,
     progressHandler: (@Sendable (Progress) -> Void)? = nil
   ) async throws -> URL {
-    let localURL = URL(fileURLWithPath: modelSpec).standardizedFileURL
+    let localURL = URL(fileURLWithPath: expandedLocalPath(from: modelSpec)).standardizedFileURL
     if FileManager.default.fileExists(atPath: localURL.path) {
       return localURL
+    }
+
+    if looksLikeLocalPath(modelSpec) {
+      throw ModelResolutionError.localPathNotFound(localURL.path)
     }
 
     if !isHuggingFaceModelId(modelSpec) {
@@ -259,10 +280,16 @@ public enum ModelResolution {
       )
     } catch {
       if let clientError = error as? HTTPClientError,
-        case .responseError(let response, _) = clientError,
-        response.statusCode == 401 || response.statusCode == 403
+        case .responseError(let response, _) = clientError
       {
-        throw ModelResolutionError.authorizationRequired(modelId)
+        switch response.statusCode {
+        case 401, 403:
+          throw ModelResolutionError.authorizationRequired(modelId)
+        case 404:
+          throw ModelResolutionError.modelNotFound(modelId)
+        default:
+          break
+        }
       }
 
       if let urlError = error as? URLError,

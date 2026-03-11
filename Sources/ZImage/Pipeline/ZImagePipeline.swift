@@ -72,6 +72,7 @@ public final class ZImagePipeline {
     case notImplemented
     case tokenizerNotLoaded
     case invalidDimensions(String)
+    case invalidModelPath(String)
     case textEncoderNotLoaded
     case transformerNotLoaded
     case vaeNotLoaded
@@ -168,16 +169,22 @@ public final class ZImagePipeline {
     var aioTextEncoderPrefix: String?
   }
 
-  func resolveModelSelection(_ modelSpec: String?, forceTransformerOverrideOnly: Bool) -> ModelSelection {
+  func resolveModelSelection(_ modelSpec: String?, forceTransformerOverrideOnly: Bool) throws -> ModelSelection {
     guard let modelSpec else {
       return .init(baseModelSpec: nil, transformerOverrideURL: nil, aioCheckpointURL: nil, aioTextEncoderPrefix: nil)
     }
 
-    let candidateURL = URL(fileURLWithPath: modelSpec)
+    let resolvedPath = ModelResolution.expandedLocalPath(from: modelSpec)
+    let candidateURL = URL(fileURLWithPath: resolvedPath)
     var isDir: ObjCBool = false
     if FileManager.default.fileExists(atPath: candidateURL.path, isDirectory: &isDir) {
       if !isDir.boolValue, candidateURL.pathExtension == "safetensors" {
         return resolveLocalSafetensors(candidateURL, forceTransformerOverrideOnly: forceTransformerOverrideOnly)
+      }
+      if !isDir.boolValue {
+        throw PipelineError.invalidModelPath(
+          "Unsupported local model file: \(candidateURL.path). Use a Diffusers-style directory or a .safetensors checkpoint."
+        )
       }
       if isDir.boolValue {
         let required = [
@@ -198,11 +205,12 @@ public final class ZImagePipeline {
           ?? []
         let safes = contents.filter { $0.pathExtension == "safetensors" }
         if safes.isEmpty {
-          logger.warning(
-            "Model path is a directory without expected configs or safetensors: \(modelSpec). Falling back to default model."
+          throw PipelineError.invalidModelPath(
+            """
+            Invalid local model directory: \(candidateURL.path).
+            Expected a Diffusers-style snapshot with configs/tokenizer files or at least one .safetensors checkpoint.
+            """
           )
-          return .init(
-            baseModelSpec: nil, transformerOverrideURL: nil, aioCheckpointURL: nil, aioTextEncoderPrefix: nil)
         }
 
         let preferred =
@@ -222,7 +230,11 @@ public final class ZImagePipeline {
       }
 
       return .init(
-        baseModelSpec: modelSpec, transformerOverrideURL: nil, aioCheckpointURL: nil, aioTextEncoderPrefix: nil)
+        baseModelSpec: candidateURL.path,
+        transformerOverrideURL: nil,
+        aioCheckpointURL: nil,
+        aioTextEncoderPrefix: nil
+      )
     }
 
     return .init(
@@ -664,7 +676,7 @@ public final class ZImagePipeline {
       throw PipelineError.invalidDimensions(
         "Height must be divisible by \(vaeScale) (got \(request.height)). Please adjust to a multiple of \(vaeScale).")
     }
-    let selection = resolveModelSelection(
+    let selection = try resolveModelSelection(
       request.model, forceTransformerOverrideOnly: request.forceTransformerOverrideOnly)
     try await loadModel(
       modelSpec: selection.baseModelSpec,

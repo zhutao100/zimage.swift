@@ -141,6 +141,7 @@ public enum ZImageFiles {
         return """
           Requested weightsVariant '\(weightsVariant)' but missing required component weights: \(components).
           Snapshot: \(snapshot.path)
+          Make sure transformer, text_encoder, and vae all ship matching '.\(weightsVariant)' weights, or remove --weights-variant.
           """
       }
     }
@@ -426,7 +427,7 @@ public enum ZImageFiles {
       }
       let candidates = preferred.isEmpty ? safetensors : preferred
 
-      var relativeAll =
+      let relativeAll =
         candidates
         .map { "\(componentDir)/\($0.lastPathComponent)" }
       let selected = selectDeterministicGroup(

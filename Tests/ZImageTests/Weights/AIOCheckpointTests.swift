@@ -62,12 +62,47 @@ final class AIOCheckpointTests: MLXTestCase {
 
     let pipeline = ZImagePipeline(logger: Logger(label: "test"))
 
-    let auto = pipeline.resolveModelSelection(fileURL.path, forceTransformerOverrideOnly: false)
+    let auto = try pipeline.resolveModelSelection(fileURL.path, forceTransformerOverrideOnly: false)
     XCTAssertEqual(auto.aioCheckpointURL?.standardizedFileURL.path, fileURL.standardizedFileURL.path)
     XCTAssertNil(auto.transformerOverrideURL)
 
-    let forced = pipeline.resolveModelSelection(fileURL.path, forceTransformerOverrideOnly: true)
+    let forced = try pipeline.resolveModelSelection(fileURL.path, forceTransformerOverrideOnly: true)
     XCTAssertEqual(forced.transformerOverrideURL?.standardizedFileURL.path, fileURL.standardizedFileURL.path)
     XCTAssertNil(forced.aioCheckpointURL)
+  }
+
+  func testResolveModelSelectionRejectsInvalidLocalDirectory() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("invalid_model_\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let pipeline = ZImagePipeline(logger: Logger(label: "test"))
+
+    XCTAssertThrowsError(try pipeline.resolveModelSelection(tempDir.path, forceTransformerOverrideOnly: false)) {
+      error in
+      guard case ZImagePipeline.PipelineError.invalidModelPath(let message) = error else {
+        XCTFail("Unexpected error: \(error)")
+        return
+      }
+      XCTAssertTrue(message.contains("Invalid local model directory"))
+    }
+  }
+
+  func testResolveModelSelectionRejectsUnsupportedLocalFile() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+    let fileURL = tempDir.appendingPathComponent("invalid_model_\(UUID().uuidString).txt")
+    defer { try? FileManager.default.removeItem(at: fileURL) }
+    try Data("not a model".utf8).write(to: fileURL)
+
+    let pipeline = ZImagePipeline(logger: Logger(label: "test"))
+
+    XCTAssertThrowsError(try pipeline.resolveModelSelection(fileURL.path, forceTransformerOverrideOnly: false)) {
+      error in
+      guard case ZImagePipeline.PipelineError.invalidModelPath(let message) = error else {
+        XCTFail("Unexpected error: \(error)")
+        return
+      }
+      XCTAssertTrue(message.contains("Unsupported local model file"))
+    }
   }
 }

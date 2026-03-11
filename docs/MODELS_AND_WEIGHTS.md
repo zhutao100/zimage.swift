@@ -41,7 +41,7 @@ When a text-to-image model spec is provided:
    - Local Diffusers-style directory: use it as-is.
    - Local `.safetensors`: inspect for AIO coverage first; treat it as a transformer-only override otherwise.
    - Local directory without the expected configs but with `.safetensors`: pick a preferred file from the directory, favoring filenames that contain `v2`, otherwise the largest `.safetensors`, then inspect that file as a local checkpoint.
-   - Local directory without the expected configs and without any `.safetensors`: the text-to-image pipeline warns and falls back to the default model.
+   - Local directory without the expected configs and without any `.safetensors`: the text-to-image pipeline fails with an explicit local-path error instead of falling back to the default model.
 2. Otherwise, if it looks like `org/repo` or `org/repo:revision`, the repo checks the Hugging Face cache.
 3. If no matching snapshot is cached, it downloads the required files into the Hugging Face cache and then loads from that snapshot.
 
@@ -81,7 +81,7 @@ Source of truth:
 
 The repo relies on the Hugging Face client libraries' environment-based authentication. In practice, `HF_TOKEN` is the most direct user-facing way to authenticate for gated or private repos.
 
-If a repo requires auth and loading fails, the two supported fallback paths are:
+If a repo requires auth and loading fails, the error now points directly at `HF_TOKEN` and local-snapshot fallback. The two supported fallback paths are:
 
 - authenticate and rerun
 - download the weights locally and point `--model` or `--controlnet-weights` at the local path
@@ -104,6 +104,8 @@ This behavior is implemented in:
 - `Sources/ZImage/Pipeline/PipelineSnapshot.swift`
 
 Current nuance: `weightsVariant` selects which files are loaded. It is not a global runtime compute-dtype switch.
+
+If the requested variant is incomplete, the error names the missing components and suggests removing `--weights-variant` unless transformer, text encoder, and VAE all ship matching files.
 
 ## Quantized Models
 
@@ -176,9 +178,10 @@ Source of truth:
 
 ### Model Not Found
 
-- If you passed a local path, verify the path exists and is readable.
+- If you passed a local path, verify the path exists, expands correctly from `~`, and points to a supported local model form.
+  Supported text-to-image forms are a Diffusers-style directory or a local `.safetensors`.
 - If you passed `org/repo`, verify the repo exists and your network is available.
-- If the repo is gated or private, authenticate and retry or use a local download.
+- If the repo is gated or private, set `HF_TOKEN` and retry or use a local download.
 
 ### Wrong Results From `Tongyi-MAI/Z-Image`
 

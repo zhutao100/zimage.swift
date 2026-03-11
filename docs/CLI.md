@@ -95,7 +95,7 @@ On the text-to-image command, `--model/-m` accepts:
   - AIO checkpoint if the file contains all expected components
   - transformer-only override otherwise
 
-If you point `--model` at a local directory that does not contain the expected Diffusers-style configs but does contain `.safetensors`, the text-to-image resolver picks a preferred file from that directory and inspects it as a local checkpoint. If the directory contains neither the expected configs nor any `.safetensors`, the text-to-image pipeline warns and falls back to the default model.
+If you point `--model` at a local directory that does not contain the expected Diffusers-style configs but does contain `.safetensors`, the text-to-image resolver picks a preferred file from that directory and inspects it as a local checkpoint. If the directory contains neither the expected configs nor any `.safetensors`, the command now fails with an explicit local-path error instead of falling back to the default model.
 
 See [MODELS_AND_WEIGHTS.md](MODELS_AND_WEIGHTS.md) for resolver details.
 
