@@ -80,7 +80,7 @@ Explicit flags still override those values field by field. Example:
   --output base.png
 ```
 
-Important nuance: preset lookup is id-based. Local paths and unknown model ids keep the Turbo-compatible preset unless you set the relevant flags explicitly.
+Important nuance: preset lookup now covers known ids, inspectable local or cached snapshots, and common Z-Image-style aliases. Completely unrecognized models still keep the Turbo-compatible preset unless you set the relevant flags explicitly.
 
 LoRA nuance: third-party adapter cards can recommend sampling settings that differ from the base-model defaults. The CLI does not auto-parse adapter README files into presets, so keep `--steps` and `--guidance` explicit when an adapter card calls out values.
 
@@ -161,7 +161,7 @@ Important `control` flags:
 - `--weights-variant`, `--cache-limit`, `--max-sequence-length`, `--no-progress`
 - `--log-control-memory`: emit control-path memory markers
 
-Known `Tongyi-MAI` model ids use the same model-aware defaults on the `control` subcommand. Local paths and unknown ids still need explicit sampling flags if you do not want the Turbo-compatible preset.
+Known `Tongyi-MAI` model ids, inspectable local or cached snapshots, and common Z-Image-style aliases use the same model-aware defaults on the `control` subcommand. Completely unrecognized models still need explicit sampling flags if you do not want the Turbo-compatible preset.
 
 At least one of `--control-image`, `--inpaint-image`, or `--mask` must be present.
 

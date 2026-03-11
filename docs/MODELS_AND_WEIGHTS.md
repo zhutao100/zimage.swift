@@ -187,7 +187,8 @@ Source of truth:
 
 For the built-in `Tongyi-MAI/Z-Image` id, the CLI applies Base-friendly defaults (`50` steps, guidance `4.0`).
 
-If you point `--model` at a local Base snapshot or another unknown alias, the CLI cannot identify it as Base ahead of load time and will keep the Turbo-compatible preset unless you set `--steps` and `--guidance` explicitly.
+The CLI now inspects local or cached snapshot metadata, nearby snapshot directories for local checkpoint files, and common Z-Image-style aliases before falling back to Turbo-compatible defaults.
+Completely unrecognized models can still need explicit `--steps` and `--guidance` if you do not want the Turbo-compatible preset.
 
 For repo-side regression checking against the real Base checkpoint, there is also an opt-in Base smoke test in `Tests/ZImageIntegrationTests/PipelineIntegrationTests.swift`; see [DEVELOPMENT.md](DEVELOPMENT.md) for the invocation.
 

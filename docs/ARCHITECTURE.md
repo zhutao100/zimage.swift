@@ -80,7 +80,7 @@ The loading path is split across:
 - `Sources/ZImage/Pipeline/ZImagePipeline.swift`
 - `Sources/ZImage/Weights/AIOCheckpoint.swift`
 
-Known model ids and per-model presets are centralized in `Sources/ZImage/Support/ZImageModelRegistry.swift`. The CLI applies those presets only to fields the user did not set. Current nuance: preset lookup is id-based, so local paths and unknown model ids still fall back to the Turbo-compatible preset unless the caller overrides the relevant fields explicitly.
+Known model ids and per-model presets are centralized in `Sources/ZImage/Support/ZImageModelRegistry.swift`. The CLI applies those presets only to fields the user did not set. Current nuance: preset lookup covers known ids, inspectable local or cached snapshots, and common Z-Image-style aliases. Completely unrecognized models still fall back to the Turbo-compatible preset unless the caller overrides the relevant fields explicitly.
 
 ## Weight Mapping
 

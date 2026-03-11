@@ -27,7 +27,7 @@ Known `Tongyi-MAI` ids get model-aware defaults:
 - Turbo: `1024x1024`, `9` steps, guidance `0.0`
 - Base: `1024x1024`, `50` steps, guidance `4.0`
 
-Local paths and unknown aliases still fall back to Turbo-compatible defaults unless you set `--steps` and `--guidance` explicitly.
+Known ids, inspectable local or cached snapshots, and common Z-Image-style aliases get model-aware defaults. Completely unrecognized models still fall back to Turbo-compatible defaults unless you set `--steps` and `--guidance` explicitly.
 
 ## Examples
 
@@ -192,7 +192,7 @@ The detailed behavior for cache lookup, local-path handling, AIO checkpoints, qu
 
 ## Current Limitations
 
-- Model-aware defaults are id-based. Local Base snapshots and unknown aliases still need explicit `--steps` and `--guidance` if you want Base-style sampling.
+- Model-aware defaults cover known ids, inspectable local or cached snapshots, and common Z-Image-style aliases. Completely unrecognized models still need explicit `--steps` and `--guidance` if you do not want the Turbo-compatible preset.
 - `ZImageCLI control` does not expose the control-pipeline LoRA or prompt-enhancement fields that exist in `ZImageControlGenerationRequest`.
 - Text-to-image supports local AIO / transformer-only `.safetensors`; the control path currently expects a standard model snapshot or local directory instead.
 - Third-party LoRA cards can recommend different sampling settings. The CLI does not parse adapter metadata into presets.

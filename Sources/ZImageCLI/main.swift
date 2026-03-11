@@ -280,7 +280,7 @@ enum ZImageCLI {
         --no-progress          Disable progress output
         --help, -h             Show help
 
-      Known Tongyi-MAI ids apply model-aware presets. Local paths and unknown ids keep the Turbo-compatible preset unless you override the sampling flags.
+      Known Tongyi-MAI ids, inspectable local or cached snapshots, and common Z-Image aliases apply model-aware presets. Unrecognized models still keep the Turbo-compatible preset unless you override the sampling flags.
 
       Subcommands:
         quantize               Quantize model weights
@@ -783,7 +783,7 @@ enum ZImageCLI {
         --help, -h                Show help
 
       Note: At least one of --control-image, --inpaint-image, or --mask must be provided.
-      Known Tongyi-MAI ids apply model-aware presets. Local paths and unknown ids keep the Turbo-compatible preset unless you override the sampling flags.
+      Known Tongyi-MAI ids, inspectable local or cached snapshots, and common Z-Image aliases apply model-aware presets. Unrecognized models still keep the Turbo-compatible preset unless you override the sampling flags.
 
       Control Types:
         The control image should be pre-processed according to the control type:

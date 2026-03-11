@@ -162,7 +162,7 @@ public enum ModelResolution {
     HuggingFaceHub.cacheDirectory()
   }
 
-  private static func findCachedModel(
+  static func findCachedModel(
     modelId: String,
     revision: String?,
     requireWeights: Bool = true,
