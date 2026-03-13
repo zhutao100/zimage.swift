@@ -1,11 +1,19 @@
 import Foundation
 
 public enum GenerationJobInvocationParser {
-  private static let cliPrograms: Set<String> = ["ZImageCLI", "./ZImageCLI"]
-  private static let servePrograms: Set<String> = ["ZImageServe", "./ZImageServe"]
+  public static func programKind(for token: String) -> CLIProgramKind? {
+    switch NSString(string: token).lastPathComponent {
+    case CLIProgramKind.cli.executableName:
+      return .cli
+    case CLIProgramKind.serve.executableName:
+      return .serve
+    default:
+      return nil
+    }
+  }
 
   public static func supportsProgram(_ token: String) -> Bool {
-    cliPrograms.contains(token) || servePrograms.contains(token)
+    programKind(for: token) != nil
   }
 
   public static func parse(tokens: [String], usage: CLIUsageTopic) throws -> GenerationJobPayload {
@@ -13,13 +21,14 @@ public enum GenerationJobInvocationParser {
       throw CLIError(message: "Missing staged generation command", usage: usage)
     }
 
-    if cliPrograms.contains(tokens[0]) {
+    switch programKind(for: tokens[0]) {
+    case .cli:
       return try parseCLI(tokens: Array(tokens.dropFirst()), usage: usage)
-    }
-    if servePrograms.contains(tokens[0]) {
+    case .serve:
       return try parseServe(tokens: Array(tokens.dropFirst()), usage: usage)
+    case nil:
+      return try parseServe(tokens: tokens, usage: usage)
     }
-    return try parseServe(tokens: tokens, usage: usage)
   }
 
   private static func parseCLI(tokens: [String], usage: CLIUsageTopic) throws -> GenerationJobPayload {

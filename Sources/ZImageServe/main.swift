@@ -62,7 +62,7 @@ enum ZImageServe {
       try submitBatch(manifest.submissions(), socketPath: socketPath, sourceLabel: manifestPath)
     case .markdown(let socketPath, let markdownPath):
       let submissions = try MarkdownCommandExtractor.submissions(fromPath: markdownPath)
-      try submitBatch(submissions, socketPath: socketPath, sourceLabel: markdownPath)
+      try submitMarkdownBatch(submissions, socketPath: socketPath, sourceLabel: markdownPath)
     case .quantize(let options):
       logMetalDevice()
       try CLICommandRunner.runQuantize(options)
@@ -73,16 +73,56 @@ enum ZImageServe {
   }
 
   private static func submitBatch(_ submissions: [BatchSubmission], socketPath: String?, sourceLabel: String) throws {
+    try submitResolvedBatch(
+      submissions,
+      socketPath: socketPath,
+      sourceLabel: sourceLabel,
+      jobID: \.jobID
+    ) { $0 }
+  }
+
+  private static func submitMarkdownBatch(
+    _ submissions: [MarkdownSubmission],
+    socketPath: String?,
+    sourceLabel: String
+  ) throws {
+    try submitResolvedBatch(
+      submissions,
+      socketPath: socketPath,
+      sourceLabel: sourceLabel,
+      jobID: \.jobID
+    ) { submission in
+      BatchSubmission(jobID: submission.jobID, job: try submission.resolveJob())
+    }
+  }
+
+  private static func submitResolvedBatch<Submission>(
+    _ submissions: [Submission],
+    socketPath: String?,
+    sourceLabel: String,
+    jobID: KeyPath<Submission, String>,
+    resolve: (Submission) throws -> BatchSubmission
+  ) throws {
     let total = submissions.count
     var failures: [String] = []
 
     for (index, submission) in submissions.enumerated() {
-      logger.info("Submitting \(submission.jobID) (\(index + 1)/\(total)) from \(sourceLabel)")
+      let resolvedSubmission: BatchSubmission
       do {
-        try submitJob(submission, socketPath: socketPath)
+        resolvedSubmission = try resolve(submission)
       } catch {
         let message = CLIErrors.describe(error)
-        failures.append("\(submission.jobID): \(message)")
+        failures.append("\(submission[keyPath: jobID]): \(message)")
+        logger.error("\(message)")
+        continue
+      }
+
+      logger.info("Submitting \(resolvedSubmission.jobID) (\(index + 1)/\(total)) from \(sourceLabel)")
+      do {
+        try submitJob(resolvedSubmission, socketPath: socketPath)
+      } catch {
+        let message = CLIErrors.describe(error)
+        failures.append("\(resolvedSubmission.jobID): \(message)")
         logger.error("\(message)")
       }
     }

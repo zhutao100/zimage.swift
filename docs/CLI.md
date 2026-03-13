@@ -116,7 +116,7 @@ ZImageServe --prompt "a mountain lake at sunrise" --model mzbac/z-image-turbo-8b
 ```
 ````
 
-Markdown ingestion is parse-only. Each accepted `bash`, `sh`, or `zsh` fence must reduce to exactly one `ZImageCLI` or `ZImageServe` invocation. Shell control operators, redirects, command substitution, and shell expansion syntax are rejected instead of executed. Batch and markdown submissions continue through the manifest in client order and report an aggregated non-zero failure if any staged job fails.
+Markdown ingestion is single-command only. Each accepted `bash`, `sh`, or `zsh` fence must reduce to exactly one direct `ZImageCLI` or `ZImageServe` invocation. Explicit relative or absolute executable paths are accepted, and command substitutions are evaluated when each markdown item starts. Wrappers such as `env` or `time`, shell control operators, redirects, and other shell expansion syntax remain rejected instead of executed. Batch and markdown submissions continue through the manifest in client order and report an aggregated non-zero failure if any staged job fails.
 
 ## Text-To-Image
 

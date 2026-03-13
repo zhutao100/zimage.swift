@@ -162,7 +162,7 @@ Structured staged submission:
 ./ZImageServe markdown prompts.md
 ```
 
-`ZImageServe` reuses the normal generation flags for ad hoc requests, prints the accepted job id for cancellation, exposes `status`, `cancel`, and `shutdown` for daemon operations, and keeps JSON/markdown ingestion on the client side so the socket protocol stays canonical. Markdown ingestion accepts single fenced `bash`/`sh`/`zsh` invocations for `ZImageCLI` or `ZImageServe` and rejects shell control operators or expansion syntax instead of executing them.
+`ZImageServe` reuses the normal generation flags for ad hoc requests, prints the accepted job id for cancellation, exposes `status`, `cancel`, and `shutdown` for daemon operations, and keeps JSON/markdown ingestion on the client side so the socket protocol stays canonical. Markdown ingestion accepts single fenced `bash`/`sh`/`zsh` invocations for direct `ZImageCLI` or `ZImageServe` commands, including explicit relative or absolute executable paths. Command substitutions are resolved when each markdown item starts, while wrappers, shell control operators, and other shell expansion syntax remain rejected.
 
 `ZImageCLI control` also accepts `--lora`, `--lora-scale`, `--enhance`, and `--enhance-max-tokens`.
 

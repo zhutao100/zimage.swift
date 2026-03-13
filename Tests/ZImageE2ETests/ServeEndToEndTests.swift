@@ -148,11 +148,11 @@ final class ServeEndToEndTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: tempDirectory) }
 
     let missingModelPath = tempDirectory.appendingPathComponent("missing-model").path
-    let outputPath = tempDirectory.appendingPathComponent("markdown.png").path
+    let outputPathTemplate = tempDirectory.appendingPathComponent("markdown-$(printf runtime).png").path
     let markdownURL = tempDirectory.appendingPathComponent("prompts.md")
     try """
       ```bash
-      ZImageServe --prompt "a forest path" --model \(missingModelPath) --output \(outputPath)
+      ZImageServe --prompt "a forest path" --model \(missingModelPath) --output "\(outputPathTemplate)"
       ```
       """.write(to: markdownURL, atomically: true, encoding: .utf8)
 
@@ -165,6 +165,7 @@ final class ServeEndToEndTests: XCTestCase {
     XCTAssertNotEqual(exitCode, 0)
     XCTAssertTrue(output.contains("markdown-1"))
     XCTAssertTrue(output.contains("failed staged job"))
+    XCTAssertFalse(output.contains("Command substitution failed"))
     XCTAssertTrue(process.isRunning)
   }
 
