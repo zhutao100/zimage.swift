@@ -145,5 +145,8 @@ For external-project references, prefer local clones configured in `config/exter
   - `~/bin/stls.py --format toon <file.safetensors>`
   - If not present: `curl https://gist.githubusercontent.com/zhutao100/cc481d2cd248aa8769e1abb3887facc8/raw/89d644c490bcf5386cb81ebcc36c92471f578c60/stls.py > /tmp/stls.py`
 - Common Hugging Face snapshot roots:
-  - `~/.cache/huggingface/hub/models--Tongyi-MAI--Z-Image-Turbo/snapshots`
-  - `~/.cache/huggingface/hub/models--Tongyi-MAI--Z-Image/snapshots`
+  - `~/.cache/huggingface/hub/models--Tongyi-MAI--Z-Image-Turbo`
+  - `~/.cache/huggingface/hub/models--Tongyi-MAI--Z-Image`
+  - `~/.cache/huggingface/hub/models--alibaba-pai--Z-Image-Turbo-Fun-Controlnet-Union-2.1`
+  - `~/.cache/huggingface/hub/models--alibaba-pai--Z-Image-Fun-Controlnet-Union-2.1`
+  - `~/.cache/huggingface/hub/models--alibaba-pai--Z-Image-Fun-Lora-Distill`

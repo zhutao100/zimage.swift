@@ -45,6 +45,8 @@ This folder is the current reference set for `zimage.swift`. Start with the root
   Current control-memory status, retained measurement recipe, and re-entry criteria.
 - [dev_plans/staging-cli-service/README.md](dev_plans/staging-cli-service/README.md)
   Completed implementation plan and validation record for the local staging daemon, warm serving, and batch/markdown submission workflows.
+- [dev_plans/z-image-fun-support/README.md](dev_plans/z-image-fun-support/README.md)
+  Active plan for adding the recently released Z-Image Base Distill LoRA and Union 2.1 ControlNet family support.
 
 ## Background And Historical Notes
 

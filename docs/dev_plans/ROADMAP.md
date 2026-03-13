@@ -5,15 +5,18 @@ The previous pipeline/CLI/model-loading cleanup items were completed in the Marc
 
 ## Near Term
 
-1. **Add a first-party app example**
+1. **Add support for the newly released Z-Image Fun Base add-ons**
+   - Prioritize `alibaba-pai/Z-Image-Fun-Controlnet-Union-2.1` and `alibaba-pai/Z-Image-Fun-Lora-Distill`.
+   - Use [z-image-fun-support/README.md](z-image-fun-support/README.md) as the active plan.
+2. **Add a first-party app example**
    - The package declares an iOS library target, but the repo still has no maintained sample app.
-2. **Consider batch or multi-image generation**
+3. **Consider batch or multi-image generation**
 
 ## Follow-On Work
 
-3. **Re-evaluate the CLI parsing approach after the next user-facing feature pass**
+4. **Re-evaluate the CLI parsing approach after the next user-facing feature pass**
    - The current manual parser is much stricter now, so replacing it is no longer blocking on basic ergonomics.
-4. **Expand preset detection only if more upstream model families make the current heuristics insufficient**
+5. **Expand preset detection only if more upstream model families make the current heuristics insufficient**
    - Known ids, local snapshot metadata, cached metadata, and common Z-Image aliases now cover the current practical cases.
 
 ## Ongoing Maintenance
