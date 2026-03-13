@@ -195,6 +195,19 @@ final class LoRALoaderTests: MLXTestCase {
     XCTAssertTrue(weights.weights.keys.contains("noise_refiner.1.feed_forward.w2.weight"))
   }
 
+  func testResolveSourceRequiresExplicitFilenameForKnownDistillRepo() async throws {
+    do {
+      _ = try await LoRAWeightLoader.resolveSource(.huggingFace(modelId: "alibaba-pai/Z-Image-Fun-Lora-Distill", filename: nil))
+      XCTFail("Expected explicit filename requirement")
+    } catch let error as LoRAError {
+      guard case .explicitFilenameRequired(let modelId, let suggestedFilename) = error else {
+        return XCTFail("Unexpected error: \(error)")
+      }
+      XCTAssertEqual(modelId, "alibaba-pai/Z-Image-Fun-Lora-Distill")
+      XCTAssertEqual(suggestedFilename, "Z-Image-Fun-Lora-Distill-8-Steps-2603.safetensors")
+    }
+  }
+
   private func makeLoRAFile(named stem: String, arrays: [String: MLXArray]) throws -> URL {
     let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(stem)_\(UUID().uuidString).safetensors")
     try MLX.save(arrays: arrays, metadata: [:], url: fileURL)

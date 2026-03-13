@@ -641,6 +641,14 @@ public final class ZImagePipeline: @unchecked Sendable {
   }
 
   public func warm(_ request: ZImageGenerationRequest, progressHandler: ProgressHandler? = nil) async throws {
+    if let loraConfig = request.lora {
+      do {
+        _ = try await LoRAWeightLoader.resolveSource(loraConfig.source)
+      } catch let error as LoRAError {
+        throw PipelineError.loraError(error)
+      }
+    }
+
     let selection = try resolveModelSelection(
       request.model, forceTransformerOverrideOnly: request.forceTransformerOverrideOnly)
     try await loadModel(

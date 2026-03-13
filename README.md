@@ -138,6 +138,7 @@ Text-to-image LoRA:
 
 When a LoRA repo or local directory contains multiple `.safetensors` files, `--lora-file` is required so the adapter selection stays deterministic.
 For the validated Distill adapter path `Z-Image-Fun-Lora-Distill-8-Steps-2603.safetensors`, the CLI now warns toward the upstream `--steps 8 --guidance 1.0 --lora-scale 0.8` recipe without overriding your flags automatically.
+For the known multi-file repo id `alibaba-pai/Z-Image-Fun-Lora-Distill`, `--lora-file` is required even if your local Hugging Face cache currently contains only one downloaded adapter file.
 
 ControlNet:
 
@@ -151,6 +152,7 @@ ControlNet:
 ```
 
 When a ControlNet repo or local directory contains multiple `.safetensors` files, `--control-file` is required. The current Z-Image Fun Base support target is the full Union 2.1 file `Z-Image-Fun-Controlnet-Union-2.1.safetensors`; upstream Lite and Tile filenames are rejected explicitly for now.
+For the known multi-file repo id `alibaba-pai/Z-Image-Fun-Controlnet-Union-2.1`, `--control-file` is required even if your local Hugging Face cache currently contains only the full Union file.
 
 Staging daemon:
 

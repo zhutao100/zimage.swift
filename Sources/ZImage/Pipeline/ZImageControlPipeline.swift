@@ -184,6 +184,10 @@ public struct ZImageControlGenerationRequest {
 }
 
 public class ZImageControlPipeline: @unchecked Sendable {
+  private static let knownControlnetFilenameRequirements: [String: String] = [
+    "alibaba-pai/z-image-fun-controlnet-union-2.1": "Z-Image-Fun-Controlnet-Union-2.1.safetensors"
+  ]
+
   public enum PipelineError: Error {
     case notImplemented
     case tokenizerNotLoaded
@@ -660,10 +664,49 @@ public class ZImageControlPipeline: @unchecked Sendable {
   }
 
   public func warm(_ request: ZImageControlGenerationRequest) async throws {
+    try await preflightControlnetRequest(request)
     let (snapshot, modelConfigs, _) = try await ensureBaseModelLoaded(for: request)
     try await ensureDenoiserLoaded(for: request, snapshot: snapshot, modelConfigs: modelConfigs)
     _ = try prepareVAEDecoder(snapshot: snapshot, config: modelConfigs.vae)
     Memory.clearCache()
+  }
+
+  private func preflightControlnetRequest(_ request: ZImageControlGenerationRequest) async throws {
+    if let controlnetSpec = request.controlnetWeights {
+      try await Self.preflightControlnetSelection(
+        controlnetSpec: controlnetSpec,
+        preferredFile: request.controlnetWeightsFile
+      )
+    }
+  }
+
+  static func preflightControlnetSelection(controlnetSpec: String, preferredFile: String?) async throws {
+    if let preferredFile {
+      let selectedURL = URL(fileURLWithPath: preferredFile)
+      try validateSupportedControlnetSelection(file: selectedURL)
+    }
+
+    let normalizedSpec = controlnetSpec.lowercased()
+    if let requiredFilename = knownControlnetFilenameRequirements[normalizedSpec], preferredFile == nil {
+      throw PipelineError.weightsMissing(
+        "ControlNet '\(controlnetSpec)' requires an explicit --control-file selection. Use \(requiredFilename)."
+      )
+    }
+
+    let fm = FileManager.default
+    let localURL = URL(fileURLWithPath: controlnetSpec)
+    var isDirectory: ObjCBool = false
+
+    if fm.fileExists(atPath: localURL.path, isDirectory: &isDirectory) {
+      if isDirectory.boolValue {
+        let files = try resolveControlnetWeightFiles(in: localURL, preferredFile: preferredFile)
+        if let file = files.first {
+          try validateSupportedControlnetSelection(file: file)
+        }
+      } else if localURL.pathExtension == "safetensors" {
+        try validateSupportedControlnetSelection(file: localURL)
+      }
+    }
   }
 
   private func ensureBaseModelLoaded(for request: ZImageControlGenerationRequest) async throws -> (
@@ -798,6 +841,7 @@ public class ZImageControlPipeline: @unchecked Sendable {
 
   // swiftlint:disable:next cyclomatic_complexity
   private func generateCore(_ request: ZImageControlGenerationRequest) async throws -> MLXArray {
+    try await preflightControlnetRequest(request)
     let logPhaseMemory = request.runtimeOptions.logPhaseMemory
     let residencyPolicy = request.runtimeOptions.residencyPolicy
     let (snapshot, modelConfigs, tokenizer) = try await ensureBaseModelLoaded(for: request)

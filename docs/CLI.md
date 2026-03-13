@@ -199,6 +199,7 @@ Text-to-image LoRA usage:
 `--lora` accepts a local path or a Hugging Face repo id. The same `--lora` and `--lora-scale` flags are also available on `ZImageCLI control`.
 
 When the LoRA source is a local directory or Hugging Face snapshot that contains multiple `.safetensors` files, `--lora-file` is now required. The loader no longer picks an arbitrary file or merges multiple LoRA files implicitly.
+For the known multi-file repo id `alibaba-pai/Z-Image-Fun-Lora-Distill`, `--lora-file` is required even when the local cache only contains one previously downloaded adapter file.
 
 Example for the validated Distill adapter path:
 
@@ -242,6 +243,7 @@ Z-Image-Fun-Controlnet-Union-2.1.safetensors
 ```
 
 The loader now rejects ambiguous multi-file ControlNet sources unless `--control-file` is set, and it rejects the current upstream Lite and Tile filenames for the Z-Image Fun Base family.
+For the known multi-file repo id `alibaba-pai/Z-Image-Fun-Controlnet-Union-2.1`, `--control-file` is required even when the local cache only contains the full Union file.
 
 Inpainting example:
 

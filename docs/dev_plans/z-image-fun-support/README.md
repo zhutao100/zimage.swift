@@ -7,11 +7,13 @@ Status: active on March 13, 2026
 - Phase 1 complete:
   - `--lora-file` is exposed across text CLI, control CLI, batch manifests, and staged request payloads
   - multi-file LoRA sources now fail closed unless a specific file is selected
+  - the known repo id `alibaba-pai/Z-Image-Fun-Lora-Distill` now requires explicit filename selection even when the local cache only contains one downloaded adapter file
   - the inspected Distill underscore-form keys now map onto valid Swift target paths
   - LoRA loads that resolve to zero valid target layers now fail clearly instead of silently no-oping
 - Phase 2 complete:
   - ambiguous multi-file ControlNet directories now fail closed unless `--control-file` is set
   - the current Z-Image Fun Base ControlNet support target is the full Union 2.1 file only
+  - the known repo id `alibaba-pai/Z-Image-Fun-Controlnet-Union-2.1` now requires `--control-file` even when the local cache only contains the full Union file
   - current upstream Lite and Tile filenames for the Z-Image Fun Base family are rejected explicitly
   - selected ControlNet weights are validated against the current full-layout contract (`15` layer blocks, `2` refiner blocks, `control_in_dim = 33`)
 - Phase 3 partially complete:

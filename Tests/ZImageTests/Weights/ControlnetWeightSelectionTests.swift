@@ -89,6 +89,37 @@ final class ControlnetWeightSelectionTests: MLXTestCase {
     }
   }
 
+  func testPreflightRequiresExplicitFileForKnownControlnetRepo() async throws {
+    do {
+      try await ZImageControlPipeline.preflightControlnetSelection(
+        controlnetSpec: "alibaba-pai/Z-Image-Fun-Controlnet-Union-2.1",
+        preferredFile: nil
+      )
+      XCTFail("Expected explicit control file requirement")
+    } catch let error as ZImageControlPipeline.PipelineError {
+      guard case .weightsMissing(let message) = error else {
+        return XCTFail("Unexpected error: \(error)")
+      }
+      XCTAssertTrue(message.contains("requires an explicit --control-file"))
+      XCTAssertTrue(message.contains("Z-Image-Fun-Controlnet-Union-2.1.safetensors"))
+    }
+  }
+
+  func testPreflightRejectsUnsupportedLiteSelectionBeforeLoading() async throws {
+    do {
+      try await ZImageControlPipeline.preflightControlnetSelection(
+        controlnetSpec: "alibaba-pai/Z-Image-Fun-Controlnet-Union-2.1",
+        preferredFile: "Z-Image-Fun-Controlnet-Union-2.1-lite.safetensors"
+      )
+      XCTFail("Expected unsupported lite selection")
+    } catch let error as ZImageControlPipeline.PipelineError {
+      guard case .weightsMissing(let message) = error else {
+        return XCTFail("Unexpected error: \(error)")
+      }
+      XCTAssertTrue(message.contains("Lite variants are not supported yet"))
+    }
+  }
+
   private func makeWeights(
     controlLayerBlockCount: Int,
     refinerBlockCount: Int,
