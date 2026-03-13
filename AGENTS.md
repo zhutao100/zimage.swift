@@ -7,7 +7,7 @@ This guide is for agents working inside `zimage.swift`. Treat the code and tests
 - Any task: `README.md`, then `docs/README.md`
 - Docs-only work: `README.md`, `docs/README.md`, then the source-of-truth doc for the area you are editing
 - Triage or bugfix: the relevant failing test file, then `docs/ARCHITECTURE.md`; if the issue is about model loading, also read `docs/MODELS_AND_WEIGHTS.md`
-- CLI work: `docs/CLI.md` and `Sources/ZImageCLI/main.swift`
+- CLI work: `docs/CLI.md`, then `Sources/ZImageCLICommon/`, `Sources/ZImageCLI/main.swift`, and `Sources/ZImageServe/main.swift`
 - Pipeline or feature work: `docs/ARCHITECTURE.md`, then the relevant files under `Sources/ZImage/Pipeline/`, `Sources/ZImage/Model/`, and `Sources/ZImage/Weights/`
 - Release or packaging work: `docs/DEVELOPMENT.md`, `.github/workflows/ci.yml`, `scripts/build.sh`
 - Control-memory work: `docs/DEVELOPMENT.md`, then `docs/dev_plans/controlnet-memory-followup.md`, then `Sources/ZImage/Util/ControlMemoryTelemetry.swift`
@@ -19,7 +19,13 @@ This guide is for agents working inside `zimage.swift`. Treat the code and tests
 - `Package.swift`
   - package graph, products, target list, and platform support
 - `Sources/ZImageCLI/`
-  - `main.swift`: CLI parsing, help text, and subcommands
+  - `main.swift`: thin one-shot entrypoint for the shared CLI layer
+- `Sources/ZImageCLICommon/`
+  - shared CLI parsing, request building, usage text, and one-shot execution wiring
+- `Sources/ZImageServe/`
+  - `main.swift`: staging-daemon entrypoint and client-side submission flow
+- `Sources/ZImageServeCore/`
+  - local socket transport and serial daemon coordination
 - `Sources/ZImage/`
   - `Pipeline/`: `ZImagePipeline`, `ZImageControlPipeline`, scheduler wiring, snapshot helpers
   - `Model/`: Qwen text encoder, diffusion transformer, VAE
@@ -40,7 +46,7 @@ This guide is for agents working inside `zimage.swift`. Treat the code and tests
 ## Current Source Of Truth
 
 - package layout and supported platforms: `Package.swift`
-- CLI flags and help output: `Sources/ZImageCLI/main.swift`
+- CLI flags and help output: `Sources/ZImageCLICommon/`
 - Text-to-image API: `Sources/ZImage/Pipeline/ZImagePipeline.swift`
 - ControlNet and inpainting API: `Sources/ZImage/Pipeline/ZImageControlPipeline.swift`
 - Known model ids and presets: `Sources/ZImage/Support/ZImageModelRegistry.swift`
@@ -60,7 +66,7 @@ This guide is for agents working inside `zimage.swift`. Treat the code and tests
   - `ZImageTransformer2DModel` and `ZImageControlTransformer2DModel`
   - CLI help text and docs
 - When changing user-visible behavior, update the matching docs in the same change:
-  - CLI behavior: `README.md`, `docs/CLI.md`, `Sources/ZImageCLI/main.swift`
+  - CLI behavior: `README.md`, `docs/CLI.md`, `Sources/ZImageCLICommon/`, `Sources/ZImageCLI/main.swift`, and `Sources/ZImageServe/main.swift`
   - Model loading semantics: `docs/MODELS_AND_WEIGHTS.md`, `docs/ARCHITECTURE.md`, relevant files in `Sources/ZImage/Weights/`
   - Build/test/release workflow: `docs/DEVELOPMENT.md`, `.github/workflows/ci.yml`, and helper scripts
 - Prefer `docs/` as the detailed explanation layer. Keep `README.md` short and link outward.
@@ -96,6 +102,7 @@ ZIMAGE_RUN_INTEGRATION_TESTS=1 swift test --filter ControlNetIntegrationTests
 ZIMAGE_RUN_INTEGRATION_TESTS=1 swift test --filter LoRAIntegrationTests
 ZIMAGE_RUN_INTEGRATION_TESTS=1 swift test --filter PerformanceTests
 ZIMAGE_RUN_E2E_TESTS=1 swift test --filter CLIEndToEndTests
+ZIMAGE_RUN_E2E_TESTS=1 swift test --filter ServeEndToEndTests
 ```
 
 Opt-in Base smoke test:

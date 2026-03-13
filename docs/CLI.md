@@ -1,6 +1,8 @@
 # CLI Guide (`ZImageCLI`)
 
-`ZImageCLI` is the macOS executable in this repo. The authoritative option list lives in `Sources/ZImageCLI/main.swift`; this document is the stable usage guide around it.
+`ZImageCLI` is the macOS one-shot executable in this repo. The authoritative option list now lives in the shared CLI layer under `Sources/ZImageCLICommon/`; this document is the stable usage guide around that surface.
+
+The repo also ships `ZImageServe`, a local staging daemon/client that reuses the same generation flags for ad hoc submissions. The daemon-specific behavior is summarized here where it overlaps with the CLI surface.
 
 ## Build And Locate The Binary
 
@@ -32,6 +34,27 @@ If Xcode prompts about the MLX shader-preparation package plugin, allow it. For 
 - `ZImageCLI control`: ControlNet conditioning and inpainting
 - `ZImageCLI quantize`: quantize base-model weights
 - `ZImageCLI quantize-controlnet`: quantize ControlNet weights
+- `ZImageServe serve`: start the local staging daemon
+- `ZImageServe`: submit text-to-image generation to the daemon with the same flags as `ZImageCLI`
+- `ZImageServe control`: submit ControlNet generation to the daemon with the same flags as `ZImageCLI control`
+- `ZImageServe quantize` / `quantize-controlnet`: run the same local one-shot quantization paths as `ZImageCLI`
+
+## Staging Daemon
+
+Start the daemon:
+
+```bash
+./ZImageServe serve
+```
+
+Use a custom socket path when needed:
+
+```bash
+./ZImageServe serve --socket /tmp/zimage-stage.sock
+./ZImageServe --socket /tmp/zimage-stage.sock -p "a mountain lake at sunrise" -o lake.png
+```
+
+The ad hoc generation flags remain the same as `ZImageCLI`; only the executable name changes.
 
 ## Text-To-Image
 

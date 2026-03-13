@@ -8,6 +8,7 @@ The repo ships:
 
 - `ZImage`: a Swift library for macOS and iOS targets
 - `ZImageCLI`: a macOS CLI for text-to-image, ControlNet, inpainting, and quantization workflows
+- `ZImageServe`: a macOS staging daemon/client for queued local generation requests
 
 The practical goal is to run Z-Image locally without a Python runtime while still supporting the model-loading patterns people actually use: Hugging Face snapshots, local Diffusers-style folders, quantized directories, LoRA adapters, and text-to-image AIO / transformer-only `.safetensors` files.
 
@@ -101,6 +102,7 @@ swift test
 ```bash
 cd .build/xcode/Build/Products/Release
 ./ZImageCLI --help
+./ZImageServe --help
 ./ZImageCLI -p "a studio photo of a red apple on black velvet" -o output.png
 ```
 
@@ -142,6 +144,13 @@ ControlNet:
   --controlnet-weights alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1 \
   --control-file Z-Image-Turbo-Fun-Controlnet-Union-2.1-2602-8steps.safetensors \
   --output control.png
+```
+
+Staging daemon:
+
+```bash
+./ZImageServe serve
+./ZImageServe -p "a neon-lit alley in the rain" -o staged.png
 ```
 
 `ZImageCLI control` also accepts `--lora`, `--lora-scale`, `--enhance`, and `--enhance-max-tokens`.

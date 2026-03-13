@@ -19,7 +19,9 @@ This folder is the current reference set for `zimage.swift`. Start with the root
 
 - CLI work:
   - [CLI.md](CLI.md)
+  - `Sources/ZImageCLICommon/`
   - `Sources/ZImageCLI/main.swift`
+  - `Sources/ZImageServe/main.swift`
 - Model loading, cache lookup, or safetensors behavior:
   - [MODELS_AND_WEIGHTS.md](MODELS_AND_WEIGHTS.md)
   - `Sources/ZImage/Weights/*`

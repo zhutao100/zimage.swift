@@ -10,6 +10,12 @@ Default release-path build:
 ./scripts/build.sh
 ```
 
+SwiftPM can also build the staging executable directly:
+
+```bash
+swift build --product ZImageServe
+```
+
 Override the derived-data path or configuration when needed:
 
 ```bash
@@ -62,6 +68,7 @@ ZIMAGE_RUN_E2E_TESTS=1 swift test --filter CLIEndToEndTests
 ```
 
 `ZImageE2ETests` use the `ZImageCLI` executable built by the same SwiftPM stack as `swift test`. They do not invoke `xcodebuild` internally.
+The same preparation flow now builds `ZImageServe` on demand for the staging-daemon E2E checks.
 
 Additional integration-test knobs:
 

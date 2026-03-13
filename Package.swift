@@ -7,6 +7,7 @@ let package = Package(
   products: [
     .library(name: "ZImage", targets: ["ZImage"]),
     .executable(name: "ZImageCLI", targets: ["ZImageCLI"]),
+    .executable(name: "ZImageServe", targets: ["ZImageServe"]),
   ],
   dependencies: [
     .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.30.6")),
@@ -35,13 +36,30 @@ let package = Package(
     ),
     .executableTarget(
       name: "ZImageCLI",
-      dependencies: ["ZImage"],
+      dependencies: ["ZImageCLICommon"],
       path: "Sources/ZImageCLI"
+    ),
+    .target(
+      name: "ZImageCLICommon",
+      dependencies: ["ZImage"],
+      path: "Sources/ZImageCLICommon"
+    ),
+    .target(
+      name: "ZImageServeCore",
+      dependencies: ["ZImageCLICommon"],
+      path: "Sources/ZImageServeCore"
+    ),
+    .executableTarget(
+      name: "ZImageServe",
+      dependencies: ["ZImageCLICommon", "ZImageServeCore"],
+      path: "Sources/ZImageServe"
     ),
     .testTarget(
       name: "ZImageTests",
       dependencies: [
         "ZImage",
+        "ZImageCLICommon",
+        "ZImageServeCore",
         .product(name: "MLX", package: "mlx-swift"),
       ],
       path: "Tests/ZImageTests",

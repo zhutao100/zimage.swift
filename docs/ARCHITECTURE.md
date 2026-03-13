@@ -8,6 +8,7 @@ This document maps the current implementation to the source files that define it
 
 - `ZImage`: library target
 - `ZImageCLI`: macOS CLI wrapper
+- `ZImageServe`: macOS staging daemon/client wrapper
 
 The package is defined in `Package.swift`. There is no checked-in Xcode project or workspace; Xcode builds operate through the Swift package.
 
@@ -24,7 +25,13 @@ The major runtime pieces are:
 - `Package.swift`
   - package graph, platforms, products, and target boundaries
 - `Sources/ZImageCLI/main.swift`
-  - CLI argument parsing, subcommands, progress reporting, and user-facing help text
+  - thin one-shot entrypoint for the shared CLI layer
+- `Sources/ZImageServe/main.swift`
+  - staging-daemon entrypoint and client-side submission flow
+- `Sources/ZImageCLICommon/`
+  - shared CLI parsing, request building, usage text, and one-shot execution wiring
+- `Sources/ZImageServeCore/`
+  - local socket transport and serial daemon coordination
 - `Sources/ZImage/Pipeline/`
   - `ZImagePipeline.swift`: text-to-image pipeline
   - `ZImageControlPipeline.swift`: ControlNet and inpainting pipeline
