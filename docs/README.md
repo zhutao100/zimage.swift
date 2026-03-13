@@ -41,6 +41,8 @@ This folder is the current reference set for `zimage.swift`. Start with the root
 
 - [dev_plans/controlnet-memory-followup.md](dev_plans/controlnet-memory-followup.md)
   Current control-memory status, retained measurement recipe, and re-entry criteria.
+- [dev_plans/staging-cli-service/README.md](dev_plans/staging-cli-service/README.md)
+  Active implementation plan for the local staging daemon, warm serving, and batch submission workflows.
 
 ## Background And Historical Notes
 

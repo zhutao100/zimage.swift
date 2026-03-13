@@ -1,4 +1,12 @@
-## Recommended design: new local daemon + shared parser + residency policy
+## Validated recommendation: new local daemon + shared parser + residency policy
+
+This recommendation has been checked against the current March 13, 2026 codebase.
+
+Validated findings:
+
+* `Package.swift` currently exposes only `ZImage` and `ZImageCLI`; there is no staging executable or shared CLI target yet.
+* `Sources/ZImageCLI/main.swift` still contains all parsing, validation, help text, and execution wiring in one file.
+* `Sources/ZImage/Pipeline/ZImagePipeline.swift` and `Sources/ZImage/Pipeline/ZImageControlPipeline.swift` still unload heavy modules after generation, so a daemon without residency controls would not satisfy the warm-serving requirement.
 
 The cleanest design is **a new local daemon-style executable** that sits beside the existing one-shot `ZImageCLI`, plus a **shared request/parser layer** so both tools speak the same request model.
 
@@ -40,6 +48,12 @@ The repo already gives you the right primitives:
   * memory-aware loading/unloading decisions
 
 That means the server can be added without inventing a second inference stack. The right move is to **normalize all inputs into the existing request types** and make the pipelines optionally more residency-friendly.
+
+Additional implementation constraints from the current repo:
+
+* `ZImageCLI` must keep its current help and failure behavior because the E2E suite asserts on those strings.
+* The package and docs are package-first, so the new executable should be added through SwiftPM and documented alongside `ZImageCLI`.
+* The current ControlNet path already exposes prompt-progress callbacks and cancellation checks that fit a serial worker queue.
 
 ---
 
@@ -108,6 +122,7 @@ Then:
 
 * `ZImageCLI` becomes a thin one-shot runner.
 * `ZImageServe` becomes a thin client/daemon wrapper around the same parsing/building code.
+* batch and markdown ingestion stay in shared code, but the daemon transport itself only needs canonical structured jobs.
 
 This preserves help text, flag semantics, and test expectations.
 
@@ -158,6 +173,13 @@ Use newline-delimited JSON messages for:
 * shutdown
 
 The client can render the same progress bar behavior currently used by `ZImageCLI`.
+
+Implementation note:
+
+* keep JSON batch parsing and markdown extraction in the client/shared layer
+* send only canonical job submissions over the socket
+
+That keeps the daemon smaller and avoids making the socket protocol responsible for parsing shell syntax.
 
 ---
 
@@ -211,6 +233,10 @@ For control, I would make the default server policy **adaptive**, not fully pinn
 
 That fits the current codebase, which is already somewhat memory-aware.
 
+Validation target for this section:
+
+* a second matching staged request should show reused model residency in logs and avoid the heavy load path unless the worker is evicted or the profile changes
+
 ---
 
 ## Worker model
@@ -236,6 +262,8 @@ This repo is large-model, unified-memory, Apple-Silicon-first code. Serial GPU e
 Optional later enhancement:
 
 * small LRU of warm profiles on high-memory systems
+
+That "later enhancement" stays out of the initial delivery. The first finished version should keep exactly one resident profile by default so the memory story stays predictable.
 
 ---
 
@@ -334,6 +362,14 @@ That keeps the package-first design intact.
 
 This gets the protocol, daemon lifecycle, and CLI compatibility in place.
 
+Commit boundary:
+
+* shared parser/building target
+* new `ZImageServe` executable
+* socket protocol
+* serial job submission for ad hoc requests
+* tests that lock down CLI compatibility and daemon lifecycle
+
 ### Phase 2 — true warm serving
 
 * Add residency policy to both pipelines.
@@ -343,12 +379,27 @@ This gets the protocol, daemon lifecycle, and CLI compatibility in place.
 
 This is the phase that actually satisfies the “immediately kick off” requirement.
 
+Commit boundary:
+
+* public residency policy surface on both pipelines
+* worker/profile reuse
+* idle eviction
+* memory-pressure fallback
+* measured repeated-request validation against a locally cached model profile
+
 ### Phase 3 — batch formats + operational polish
 
 * Add structured JSON batch ingestion.
 * Add markdown fenced-command ingestion.
 * Add `status`, `cancel`, `shutdown`.
 * Add job history / result manifest output if useful.
+
+Commit boundary:
+
+* JSON schema and markdown extraction
+* client-side submit loops for batch and markdown inputs
+* daemon operational commands
+* end-to-end coverage for batch, markdown, and lifecycle commands
 
 ---
 
@@ -362,6 +413,7 @@ I would consider this done when all of the following are true:
 * A second request with the same warm profile does **not** reload the heavy model components unless policy or memory pressure requires it.
 * Progress and non-zero error behavior remain comparable to `ZImageCLI`.
 * `ZImageCLI` remains behavior-compatible.
+* The staged path remains local-only by default and serializes GPU execution.
 
 ---
 
