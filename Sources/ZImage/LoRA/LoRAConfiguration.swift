@@ -129,7 +129,6 @@ public enum LoRAError: Error, LocalizedError {
   case downloadFailed(String, Error)
   case noSafetensorsFound(URL)
   case ambiguousSafetensorsSource(URL, [String])
-  case explicitFilenameRequired(modelId: String, suggestedFilename: String?)
 
   public var errorDescription: String? {
     switch self {
@@ -146,11 +145,6 @@ public enum LoRAError: Error, LocalizedError {
     case .ambiguousSafetensorsSource(let url, let files):
       let fileList = files.sorted().joined(separator: ", ")
       return "Multiple .safetensors files found in \(url.path). Specify a filename explicitly. Candidates: \(fileList)"
-    case .explicitFilenameRequired(let modelId, let suggestedFilename):
-      if let suggestedFilename {
-        return "LoRA '\(modelId)' requires an explicit filename selection. Use --lora-file \(suggestedFilename)."
-      }
-      return "LoRA '\(modelId)' requires an explicit filename selection."
     }
   }
 }

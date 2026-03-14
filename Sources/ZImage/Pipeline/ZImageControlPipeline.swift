@@ -184,10 +184,6 @@ public struct ZImageControlGenerationRequest {
 }
 
 public class ZImageControlPipeline: @unchecked Sendable {
-  private static let knownControlnetFilenameRequirements: [String: String] = [
-    "alibaba-pai/z-image-fun-controlnet-union-2.1": "Z-Image-Fun-Controlnet-Union-2.1.safetensors"
-  ]
-
   public enum PipelineError: Error {
     case notImplemented
     case tokenizerNotLoaded
@@ -686,13 +682,6 @@ public class ZImageControlPipeline: @unchecked Sendable {
       try validateSupportedControlnetSelection(file: selectedURL)
     }
 
-    let normalizedSpec = controlnetSpec.lowercased()
-    if let requiredFilename = knownControlnetFilenameRequirements[normalizedSpec], preferredFile == nil {
-      throw PipelineError.weightsMissing(
-        "ControlNet '\(controlnetSpec)' requires an explicit --control-file selection. Use \(requiredFilename)."
-      )
-    }
-
     let fm = FileManager.default
     let localURL = URL(fileURLWithPath: controlnetSpec)
     var isDirectory: ObjCBool = false
@@ -705,6 +694,18 @@ public class ZImageControlPipeline: @unchecked Sendable {
         }
       } else if localURL.pathExtension == "safetensors" {
         try validateSupportedControlnetSelection(file: localURL)
+      }
+      return
+    }
+
+    if ModelResolution.isHuggingFaceModelId(controlnetSpec) {
+      let snapshot = try await ModelResolution.resolve(
+        modelSpec: controlnetSpec,
+        filePatterns: ["*.safetensors", "*.json"]
+      )
+      let files = try resolveControlnetWeightFiles(in: snapshot, preferredFile: preferredFile)
+      if let file = files.first {
+        try validateSupportedControlnetSelection(file: file)
       }
     }
   }

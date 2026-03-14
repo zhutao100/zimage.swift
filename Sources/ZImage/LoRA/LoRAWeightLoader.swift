@@ -2,9 +2,6 @@ import Foundation
 import MLX
 
 public enum LoRAWeightLoader {
-  private static let knownExplicitFilenameRequirements: [String: String] = [
-    "alibaba-pai/z-image-fun-lora-distill": "Z-Image-Fun-Lora-Distill-8-Steps-2603.safetensors"
-  ]
   private static let loraPatterns: [(down: String, up: String)] = [
     (".lora_down.", ".lora_up."),
     (".lora_A.", ".lora_B."),
@@ -107,9 +104,6 @@ public enum LoRAWeightLoader {
       return url
 
     case .huggingFace(let modelId, let filename):
-      if filename == nil, let suggestedFilename = explicitFilenameRequirement(for: modelId) {
-        throw LoRAError.explicitFilenameRequired(modelId: modelId, suggestedFilename: suggestedFilename)
-      }
       return try await downloadFromHuggingFace(modelId: modelId, filename: filename)
     }
   }
@@ -233,10 +227,6 @@ public enum LoRAWeightLoader {
     } catch {
       throw LoRAError.downloadFailed(modelId, error)
     }
-  }
-
-  static func explicitFilenameRequirement(for modelId: String) -> String? {
-    knownExplicitFilenameRequirements[modelId.lowercased()]
   }
 
   private struct PartialLoRAWeights {

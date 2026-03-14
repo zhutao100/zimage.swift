@@ -195,16 +195,36 @@ final class LoRALoaderTests: MLXTestCase {
     XCTAssertTrue(weights.weights.keys.contains("noise_refiner.1.feed_forward.w2.weight"))
   }
 
-  func testResolveSourceRequiresExplicitFilenameForKnownDistillRepo() async throws {
+  func testResolveSourceUsesSingleCachedSnapshotFileWithoutFilename() async throws {
+    let resolved = try await HuggingFaceCacheTestSupport.withTemporarySnapshot(
+      repoID: "example/single-lora",
+      files: ["only.safetensors"]
+    ) { modelSpec, _ in
+      try await LoRAWeightLoader.resolveSource(.huggingFace(modelId: modelSpec, filename: nil))
+    }
+
+    XCTAssertEqual(resolved.lastPathComponent, "only.safetensors")
+  }
+
+  func testResolveSourceRejectsAmbiguousCachedSnapshotWithoutFilename() async throws {
     do {
-      _ = try await LoRAWeightLoader.resolveSource(.huggingFace(modelId: "alibaba-pai/Z-Image-Fun-Lora-Distill", filename: nil))
-      XCTFail("Expected explicit filename requirement")
-    } catch let error as LoRAError {
-      guard case .explicitFilenameRequired(let modelId, let suggestedFilename) = error else {
-        return XCTFail("Unexpected error: \(error)")
+      try await HuggingFaceCacheTestSupport.withTemporarySnapshot(
+        repoID: "example/ambiguous-lora",
+        files: ["first.safetensors", "second.safetensors"]
+      ) { modelSpec, snapshot in
+        do {
+          _ = try await LoRAWeightLoader.resolveSource(.huggingFace(modelId: modelSpec, filename: nil))
+          XCTFail("Expected ambiguous source failure")
+        } catch let error as LoRAError {
+          guard case .ambiguousSafetensorsSource(let url, let files) = error else {
+            return XCTFail("Unexpected error: \(error)")
+          }
+          XCTAssertEqual(url.standardizedFileURL.path, snapshot.standardizedFileURL.path)
+          XCTAssertEqual(files.sorted(), ["first.safetensors", "second.safetensors"])
+        }
       }
-      XCTAssertEqual(modelId, "alibaba-pai/Z-Image-Fun-Lora-Distill")
-      XCTAssertEqual(suggestedFilename, "Z-Image-Fun-Lora-Distill-8-Steps-2603.safetensors")
+    } catch {
+      XCTFail("Unexpected helper failure: \(error)")
     }
   }
 

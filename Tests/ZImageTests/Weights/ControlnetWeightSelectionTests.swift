@@ -89,19 +89,42 @@ final class ControlnetWeightSelectionTests: MLXTestCase {
     }
   }
 
-  func testPreflightRequiresExplicitFileForKnownControlnetRepo() async throws {
-    do {
+  func testPreflightAllowsSingleCachedControlnetRepoWithoutPreferredFile() async throws {
+    try await HuggingFaceCacheTestSupport.withTemporarySnapshot(
+      repoID: "example/single-controlnet",
+      files: ["Z-Image-Fun-Controlnet-Union-2.1.safetensors"]
+    ) { modelSpec, _ in
       try await ZImageControlPipeline.preflightControlnetSelection(
-        controlnetSpec: "alibaba-pai/Z-Image-Fun-Controlnet-Union-2.1",
+        controlnetSpec: modelSpec,
         preferredFile: nil
       )
-      XCTFail("Expected explicit control file requirement")
-    } catch let error as ZImageControlPipeline.PipelineError {
-      guard case .weightsMissing(let message) = error else {
-        return XCTFail("Unexpected error: \(error)")
+    }
+  }
+
+  func testPreflightRejectsAmbiguousCachedControlnetRepoWithoutPreferredFile() async throws {
+    do {
+      try await HuggingFaceCacheTestSupport.withTemporarySnapshot(
+        repoID: "example/ambiguous-controlnet",
+        files: ["union.safetensors", "union-lite.safetensors"]
+      ) { modelSpec, snapshot in
+        do {
+          try await ZImageControlPipeline.preflightControlnetSelection(
+            controlnetSpec: modelSpec,
+            preferredFile: nil
+          )
+          XCTFail("Expected ambiguous controlnet source")
+        } catch let error as ZImageControlPipeline.PipelineError {
+          guard case .weightsMissing(let message) = error else {
+            return XCTFail("Unexpected error: \(error)")
+          }
+          XCTAssertTrue(message.contains(snapshot.path))
+          XCTAssertTrue(message.contains("Specify --control-file"))
+          XCTAssertTrue(message.contains("union.safetensors"))
+          XCTAssertTrue(message.contains("union-lite.safetensors"))
+        }
       }
-      XCTAssertTrue(message.contains("requires an explicit --control-file"))
-      XCTAssertTrue(message.contains("Z-Image-Fun-Controlnet-Union-2.1.safetensors"))
+    } catch {
+      XCTFail("Unexpected helper failure: \(error)")
     }
   }
 
