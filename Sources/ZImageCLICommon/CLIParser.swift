@@ -197,7 +197,7 @@ public enum CLICompatParser {
     var maxSequenceLength: Int?
     var loraPath: String?
     var loraFile: String?
-    var loraScale: Float = 1.0
+    var loraScale: Float?
     var enhancePrompt = false
     var enhanceMaxTokens = 512
     var noProgress = false
@@ -310,7 +310,7 @@ public enum CLICompatParser {
     var maxSequenceLength: Int?
     var loraPath: String?
     var loraFile: String?
-    var loraScale: Float = 1.0
+    var loraScale: Float?
     var enhancePrompt = false
     var enhanceMaxTokens = 512
     var logControlMemory = false

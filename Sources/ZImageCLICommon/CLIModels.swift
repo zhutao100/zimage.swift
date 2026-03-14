@@ -50,7 +50,7 @@ public struct TextGenerationOptions: Codable, Sendable, Equatable {
   public var maxSequenceLength: Int?
   public var loraPath: String?
   public var loraFile: String?
-  public var loraScale: Float
+  public var loraScale: Float?
   public var enhancePrompt: Bool
   public var enhanceMaxTokens: Int
   public var noProgress: Bool
@@ -73,7 +73,7 @@ public struct TextGenerationOptions: Codable, Sendable, Equatable {
     maxSequenceLength: Int? = nil,
     loraPath: String? = nil,
     loraFile: String? = nil,
-    loraScale: Float = 1.0,
+    loraScale: Float? = nil,
     enhancePrompt: Bool = false,
     enhanceMaxTokens: Int = 512,
     noProgress: Bool = false,
@@ -126,7 +126,7 @@ public struct ControlGenerationOptions: Codable, Sendable, Equatable {
   public var maxSequenceLength: Int?
   public var loraPath: String?
   public var loraFile: String?
-  public var loraScale: Float
+  public var loraScale: Float?
   public var enhancePrompt: Bool
   public var enhanceMaxTokens: Int
   public var logControlMemory: Bool
@@ -155,7 +155,7 @@ public struct ControlGenerationOptions: Codable, Sendable, Equatable {
     maxSequenceLength: Int? = nil,
     loraPath: String? = nil,
     loraFile: String? = nil,
-    loraScale: Float = 1.0,
+    loraScale: Float? = nil,
     enhancePrompt: Bool = false,
     enhanceMaxTokens: Int = 512,
     logControlMemory: Bool = false,

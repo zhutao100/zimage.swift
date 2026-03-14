@@ -243,18 +243,31 @@ public enum CLICommandRunner {
     logger: Logger,
     runtimeOptions: ZImageRuntimeOptions = .init()
   ) -> TextExecutionPlan {
+    let requestedLoRAConfig = makeLoRAConfiguration(
+      path: options.loraPath,
+      filename: options.loraFile,
+      scale: options.loraScale,
+      logger: logger
+    )
+    let resolvedLoRASampling = resolveLoRASampling(
+      loraConfig: requestedLoRAConfig,
+      steps: options.steps,
+      guidance: options.guidance,
+      loraScale: options.loraScale,
+      logger: logger
+    )
     let preset = ZImagePreset.resolved(
       for: options.model,
       width: options.width,
       height: options.height,
-      steps: options.steps,
-      guidanceScale: options.guidance,
+      steps: resolvedLoRASampling.steps,
+      guidanceScale: resolvedLoRASampling.guidance,
       maxSequenceLength: options.maxSequenceLength
     )
     let loraConfig = makeLoRAConfiguration(
       path: options.loraPath,
       filename: options.loraFile,
-      scale: options.loraScale,
+      scale: resolvedLoRASampling.loraScale,
       logger: logger
     )
     warnIfLoRAUsesModelDefaults(
@@ -294,12 +307,25 @@ public enum CLICommandRunner {
     logger: Logger,
     runtimeOptions: ZImageControlRuntimeOptions = .init()
   ) throws -> ControlExecutionPlan {
+    let requestedLoRAConfig = makeLoRAConfiguration(
+      path: options.loraPath,
+      filename: options.loraFile,
+      scale: options.loraScale,
+      logger: logger
+    )
+    let resolvedLoRASampling = resolveLoRASampling(
+      loraConfig: requestedLoRAConfig,
+      steps: options.steps,
+      guidance: options.guidance,
+      loraScale: options.loraScale,
+      logger: logger
+    )
     let preset = ZImagePreset.resolved(
       for: options.model,
       width: options.width,
       height: options.height,
-      steps: options.steps,
-      guidanceScale: options.guidance,
+      steps: resolvedLoRASampling.steps,
+      guidanceScale: resolvedLoRASampling.guidance,
       maxSequenceLength: options.maxSequenceLength
     )
 
@@ -319,7 +345,7 @@ public enum CLICommandRunner {
     let loraConfig = makeLoRAConfiguration(
       path: options.loraPath,
       filename: options.loraFile,
-      scale: options.loraScale,
+      scale: resolvedLoRASampling.loraScale,
       logger: logger
     )
     warnIfLoRAUsesModelDefaults(
@@ -384,10 +410,11 @@ public enum CLICommandRunner {
   private static func makeLoRAConfiguration(
     path: String?,
     filename: String?,
-    scale: Float,
+    scale: Float?,
     logger: Logger
   ) -> LoRAConfiguration? {
     guard let path else { return nil }
+    let resolvedScale = scale ?? 1.0
     let expandedPath = NSString(string: path).expandingTildeInPath
     let isLocalPath =
       expandedPath.hasPrefix("/")
@@ -403,13 +430,13 @@ public enum CLICommandRunner {
           logger.warning(
             "Ignoring --lora-file because --lora already points to a specific file: \(localURL.lastPathComponent)"
           )
-          return .local(localURL, scale: scale)
+          return .local(localURL, scale: resolvedScale)
         }
-        return .local(localURL.appendingPathComponent(filename), scale: scale)
+        return .local(localURL.appendingPathComponent(filename), scale: resolvedScale)
       }
-      return .local(localURL, scale: scale)
+      return .local(localURL, scale: resolvedScale)
     }
-    return .huggingFace(path, filename: filename, scale: scale)
+    return .huggingFace(path, filename: filename, scale: resolvedScale)
   }
 
   private struct KnownLoRARecommendation {
@@ -420,26 +447,76 @@ public enum CLICommandRunner {
     let scale: Float
   }
 
+  private struct ResolvedLoRASampling {
+    let steps: Int?
+    let guidance: Float?
+    let loraScale: Float
+  }
+
+  private static func resolveLoRASampling(
+    loraConfig: LoRAConfiguration?,
+    steps: Int?,
+    guidance: Float?,
+    loraScale: Float?,
+    logger: Logger
+  ) -> ResolvedLoRASampling {
+    guard let recommendation = loraConfig.flatMap(knownLoRARecommendation(for:)) else {
+      return ResolvedLoRASampling(
+        steps: steps,
+        guidance: guidance,
+        loraScale: loraScale ?? 1.0
+      )
+    }
+
+    let resolvedSteps = steps ?? recommendation.steps
+    let resolvedGuidance = guidance ?? recommendation.guidance
+    let resolvedScale = loraScale ?? recommendation.scale
+
+    if steps == nil || guidance == nil || loraScale == nil {
+      logger.warning(
+        """
+        Auto-applying known adapter recipe for \(recommendation.modelId) (\(recommendation.filename)): \
+        --steps \(resolvedSteps) --guidance \(resolvedGuidance) --lora-scale \(resolvedScale). \
+        Set those flags explicitly to override.
+        """
+      )
+    }
+
+    return ResolvedLoRASampling(
+      steps: resolvedSteps,
+      guidance: resolvedGuidance,
+      loraScale: resolvedScale
+    )
+  }
+
   static func loraSamplingWarning(
     loraConfig: LoRAConfiguration?,
     steps: Int?,
     guidance: Float?,
-    loraScale: Float,
+    loraScale: Float?,
     preset: ZImagePreset
   ) -> String? {
     guard let loraConfig else { return nil }
 
     if let recommendation = knownLoRARecommendation(for: loraConfig) {
-      let usesRecommendedSteps = steps == recommendation.steps
-      let usesRecommendedGuidance = guidance == recommendation.guidance
-      let usesRecommendedScale = abs(loraScale - recommendation.scale) < 0.0001
-
-      if usesRecommendedSteps && usesRecommendedGuidance && usesRecommendedScale {
-        return nil
+      var overrides: [String] = []
+      if let steps, steps != recommendation.steps {
+        overrides.append("--steps \(steps)")
+      }
+      if let guidance, guidance != recommendation.guidance {
+        overrides.append("--guidance \(guidance)")
+      }
+      if let loraScale, abs(loraScale - recommendation.scale) >= 0.0001 {
+        overrides.append("--lora-scale \(loraScale)")
       }
 
+      if overrides.isEmpty {
+        return nil
+      }
+      let overrideList = overrides.joined(separator: ", ")
+
       return
-        "Known adapter guidance for \(recommendation.modelId) (\(recommendation.filename)) is --steps \(recommendation.steps) --guidance \(recommendation.guidance) --lora-scale \(recommendation.scale). The CLI does not override those values automatically."
+        "Known adapter guidance for \(recommendation.modelId) (\(recommendation.filename)) is --steps \(recommendation.steps) --guidance \(recommendation.guidance) --lora-scale \(recommendation.scale). Explicit overrides are in effect: \(overrideList)."
     }
 
     if steps == nil || guidance == nil {
@@ -454,7 +531,7 @@ public enum CLICommandRunner {
     loraConfig: LoRAConfiguration?,
     steps: Int?,
     guidance: Float?,
-    loraScale: Float,
+    loraScale: Float?,
     preset: ZImagePreset,
     logger: Logger
   ) {
@@ -478,7 +555,9 @@ public enum CLICommandRunner {
     switch loraConfig.source {
     case .huggingFace(let modelId, let filename):
       guard modelId.caseInsensitiveCompare(targetModelId) == .orderedSame else { return nil }
-      guard let filename, filename == targetFilename else { return nil }
+      if let filename, filename != targetFilename {
+        return nil
+      }
 
     case .local(let url):
       guard url.lastPathComponent == targetFilename else { return nil }

@@ -24,6 +24,7 @@ final class CLICompatParserTests: XCTestCase {
     XCTAssertEqual(options.guidance, 1.5)
     XCTAssertEqual(options.loraPath, "alibaba-pai/Z-Image-Fun-Lora-Distill")
     XCTAssertEqual(options.loraFile, "Z-Image-Fun-Lora-Distill-8-Steps-2603.safetensors")
+    XCTAssertNil(options.loraScale)
     XCTAssertTrue(options.noProgress)
   }
 

@@ -41,6 +41,7 @@ final class BatchManifestTests: XCTestCase {
     XCTAssertEqual(options.steps, 9)
     XCTAssertEqual(options.loraPath, "alibaba-pai/Z-Image-Fun-Lora-Distill")
     XCTAssertEqual(options.loraFile, "Z-Image-Fun-Lora-Distill-8-Steps-2603.safetensors")
+    XCTAssertNil(options.loraScale)
     XCTAssertEqual(options.outputPath, "lake.png")
   }
 
